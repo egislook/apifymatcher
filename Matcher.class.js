@@ -46,6 +46,10 @@ class Matcher{
     this.debug     = settings.matcher.debug;
     this.Pool;
     this.Crawler;
+    
+    // Collects errored pages to object at counts the retries
+    this.erroredRequests = {};
+    this.initialRequestsAmount = 0;
   }
   
   
@@ -67,12 +71,18 @@ class Matcher{
       return pages.length ? pages.pop() : await add();
     }
     
+    setInterval(async function(){
+      const pageList = await browser.pages();
+      const erroredRequestsLength = Object.keys(this.erroredRequests).length;
+      console.log(`[MATCHER] Free Tabs ${pages.length} / ${pageList.length}${erroredRequestsLength && ', ErroredRequests ' + erroredRequestsLength}`);
+    }, 60000);
+    
     async function push(page){
       if(!page) return;
       //await page.goto('about:blank');
       page.removeAllListeners('request');
       pages.push(page);
-      this.debug && console.log(`[MATCHER] Free ${pages.length}`);
+      this.debug && console.log(`[MATCHER] Free Tabs ${pages.length}`);
       return;
     }
     
@@ -80,21 +90,32 @@ class Matcher{
       return await browser.close();
     }
     
+    async function remove(page){
+      page && await page.close();
+      const pageList = await browser.pages();
+      console.log(`[MATCHER] Left Tabs ${pageList.length}`);
+    }
+    
     async function add(){
       const page = await browser.newPage();
       const pageList = await browser.pages();
-      console.log(`[MATCHER] Tabs ${pageList.length}`);
+      console.log(`[MATCHER] Open Tabs ${pageList.length}`);
       return page; //pages.push(page);
     }
     
-    this.Pool = ({ pull, push, close, add, browser });
+    this.Pool = ({ pull, push, close, add, browser, remove });
     return browser;
   }
   
   // Default Matchers handleRequestFunction for apify basic crawler
   async handleRequest({ request }){
     const { url, userData, retryCount } = request;
+    const { initial } = userData || {};
     let page;
+    
+    initial
+      ? console.log('[MATCHER] Initial Left', this.initialRequestsAmount-- )
+      : this.requestPendingCount() % 10 && console.log(`[MATCHER] Overall Left ${this.requestPendingCount()}`);
     
     try{
       this.debug && console.time(`[MATCHER] Opened ${url} in`);
@@ -102,10 +123,10 @@ class Matcher{
       const pageMatchSettings = this.getPageMatchSettings(request) || {};
       const { err, msg, func } = pageMatchSettings;
       // These settings can be specified for every page or for pageMatcher
-      const blockResources  = pageMatchSettings.blockResources  || userData.blockResources;
-      const noRedirects     = pageMatchSettings.noRedirects     || userData.noRedirects;
-      const useFetch        = pageMatchSettings.useFetch        || userData.useFetch;
-      const clearCookies    = pageMatchSettings.clearCookies    || userData.clearCookies;
+      const blockResources  = userData.blockResources !== undefined ? userData.blockResources : pageMatchSettings.blockResources;
+      const noRedirects     = userData.noRedirects !== undefined    ? userData.noRedirects    : pageMatchSettings.noRedirects;
+      const useFetch        = userData.useFetch !== undefined       ? userData.useFetch       : pageMatchSettings.useFetch;
+      const clearCookies    = userData.clearCookies !== undefined   ? userData.clearCookies   : pageMatchSettings.clearCookies;
       
       if(err) 
         return await this.handleFailedRequest({ request }, err, msg);
@@ -140,23 +161,30 @@ class Matcher{
           
           // Go to page
           this.debug && console.log(`[MATCHER] Opening ${url}...`);
-          await page.goto(url, { waitUntil: 'networkidle2' });
+          await page.goto(url, { 
+            waitUntil: 'networkidle2',
+            timeout: this.settings.crawler.timout || 30000
+          });
             
           this.debug && console.timeEnd(`[MATCHER] Opened ${url} in`);
           result = await func({ page, request });
           
-          page = await this.Pool.push(page);
-          
-          // No result or error in result
-          if(!result || result.error)
-            return await this.handleFailedRequest({ request, page }, 'incorrect_result', result.error, true);
+          // No result
+          if(!result)
+            return await this.handleFailedRequest({ request, page }, 'result_empty', 'Empty page result returned', true);
+            
+          // Error inside result
+          if(result.error)
+            return await this.handleFailedRequest({ request, page }, 'result_error', result.error, true);
           
           // Reclaims request
-          if(result.reclaim && retryCount < this.settings.crawler.maxRequestRetries){
-            await this.requestQueue.reclaimRequest(request);
-            this.debug && console.log(`[MATCHER] Reclaimed ${url}`);
-            return;
-          }
+          // if(result.reclaim && retryCount < this.settings.crawler.maxRequestRetries){
+          //   await page.goto(url, { waitUntil: 'networkidle2' });
+          //   this.debug && console.log(`[MATCHER] Reclaimed ${url}`);
+          //   return;
+          // }
+          
+          page = await this.Pool.push(page);
         break;
           
       }
@@ -165,25 +193,32 @@ class Matcher{
       
       // this.debug && console.log(result);
       // try{ } catch(err) { this.debug && console.log(err) }
-      this.delayPage && await new Promise(res => setTimeout(res, this.delayPage));
-      console.log(`[MATCHER] Left ${this.requestPendingCount()}`);
+      this.delayPage && await this.Apify.utils.sleep(this.delayPage);
       return;
       
     } catch(err) {
+      
+      await this.Pool.remove(page);
+      console.log(`[MATCHER] Error ${url}`, err);
+      console.log(`[MATCHER] Page Closed`, url);
       if(this.settings.matcher.delayError){
-        console.log(`[MATCHER] Delay after Error ${this.settings.matcher.delayError} ms`);
+        console.log(`[MATCHER] after Error Delay ${this.settings.matcher.delayError} ms`);
         await this.Apify.utils.sleep(this.settings.matcher.delayError);
       }
-      // close open page
-      page && await page.close();
+      
+      const retriesLeft = this.settings.crawler.maxRequestRetries - this.addErroredRequest(request, err);
+      !(retriesLeft < 0) && console.log(`[MATCHER] Retries Left`, retriesLeft, url);
+      if(retriesLeft < 0)
+        return await this.handleFailedRequest({ request }, 'request_removed', err);
+        
+      initial && this.initialRequestsAmount++;
       
       switch(err.name){
         case 'ApifyError':
         case 'TimeoutError':
-          throw(err)
+          throw(err);
         default:
-          console.log(`[MATCHER] Error ${url}`, err);
-          return await this.handleFailedRequest({ request }, err.name || 'Catch', err);
+          return await this.handleFailedRequest({ request }, err.name ? err.name : 'error_cought', err);
       }
         
       
@@ -206,7 +241,7 @@ class Matcher{
   }
   
   // Default Matchers handleFailedRequestFunction for apify basic crawler
-  async handleFailedRequest({ request: { url, errorMessages }, page }, status = 'Request_timeout', error, takeShot){
+  async handleFailedRequest({ request: { url, errorMessages }, page }, status = 'request_timeout', error, takeShot){
     const host  = url.match(/^https?\:\/\/([^\/?#]+)(?:[\/?#]|$)/i)[1];
     status      = `${status}__${host}__${new Date().getTime()}`;
     //await shot(page, host);
@@ -245,11 +280,11 @@ class Matcher{
     const pageMatch = this.pageMatcherData.find(
       matcher => matcherLabel 
         ? matcher.label === matcherLabel 
-        : matcher.url === url || url.includes(matcher.match)
+        : matcher.url === url || matcher.match instanceof Array ? matcher.match.filter( m => url.includes(m) ).length : url.includes(matcher.match)
     );
     
     if(!pageMatch || !pageMatch.func)
-      return { err: 'missing_page_setting', msg: 'Page match or "func" setting is missing' };
+      return { err: 'missing_page_setting', msg: 'Missing PageMatcher setting for this page' };
     
     return pageMatch;
   }
@@ -298,26 +333,53 @@ class Matcher{
   }
   
   // Adds urls to requestQueue
-  async queueUrls(urls, reqQueue, limit){
+  async queueUrls(urls, reqQueue, limit, initial){
     if(typeof urls === 'function')
       urls = await urls();
     if(!urls || !urls.length) return this.debug && console.log(`[MATCHER] Queueing empty URLS`);
-    reqQueue = reqQueue || this.requestQueue;
     
     if(limit)
       urls = urls.slice(0, limit);
       
-    reqQueue = reqQueue || global.requestQueue;
+    reqQueue = reqQueue || this.requestQueue || global.requestQueue;
     let i, urlObj, url, userData;
     
+    console.log(`[MATCHER] Queuing ${urls.length}`);
     for(i in urls){
+      
       urlObj    = typeof urls[i] === 'string' ? { url: urls[i] } : urls[i];
       url       = urlObj.url;
-      userData  = urlObj.userData || { ...urlObj };
+      userData  = urlObj.userData ? { ...urlObj.userData, initial } : { ...urlObj, initial };
+      
+      if(initial){
+        delete userData.url;
+        delete userData.urls;
+      }
+      
       await reqQueue.addRequest(new this.Apify.Request({ url, userData }));
       this.debug && console.log(`[MATCHER] Queued ${this.requestPendingCount()}`, url, { userDataSize: Object.keys(userData).length });
+      userData.initial && this.initialRequestsAmount++;
     }
-    console.log(`[MATCHER] Queued ${urls.length}`);
+  }
+  
+  /**
+   * Request tracker functions
+   */
+  addErroredRequest(request, err){
+    const { url } = request;
+    
+    if(this.erroredRequests[url]){
+      this.erroredRequests[url].retries = this.erroredRequests[url].retries + 1;
+      return this.erroredRequests[url].retries
+    }
+    
+    this.erroredRequests[url] = {
+      retries: 1,
+      url,
+      err,
+    }
+    
+    return 1;
   }
   
   /** Helpers

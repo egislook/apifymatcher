@@ -27,9 +27,7 @@ function utils(Apify){
     return typeof num === 'string' ? parseFloat(num.replace(/(?!-)[^0-9.]/g, '')) : num;
   }
   
-  async function getSpreadsheet({ spreadsheetId, listId, limit, max, start }, filter){
-    limit = limit || 0;
-    
+  async function getSpreadsheet({ spreadsheetId, listId, max, start }, filterFn){
     // Generates url
     let url = [`https://spreadsheets.google.com/feeds/list/${spreadsheetId}/${listId}/public/values?alt=json`];
     start && url.push('start-index=' + start); max && url.push('max-results=' + max); url = url.join('&');
@@ -37,9 +35,6 @@ function utils(Apify){
     console.log('[MATCHER] Loading Spreadsheet', url);
     const result = await fetch(url).then(res => res.json());
     let entries = result.feed && result.feed.entry || [];
-    
-    if(limit)
-      entries = entries.slice(0, limit);
       
     return entries.reduce( (arr, entry) => {
       
@@ -52,9 +47,9 @@ function utils(Apify){
         return Object.assign(obj, { [newKey]: val });
       }, {});
       
-      !filter && arr.push(newEntry);
+      !filterFn && arr.push(newEntry);
       
-      newEntry = filter(newEntry);
+      newEntry = filterFn(newEntry);
       newEntry && arr.push(newEntry);
       
       return arr;
