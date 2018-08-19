@@ -328,7 +328,7 @@ class Matcher{
     if(rq.pendingCount) return rq.pendingCount;
     const count = rq.requestsCache.listDictionary.linkedList.length;
     if(!cr) return count;
-    return count - cr.basicCrawler.handledRequestsCount;
+    return count - cr.handledRequestsCount;
   }
   
   async getProxyUrl(){
