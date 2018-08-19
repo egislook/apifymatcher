@@ -27,28 +27,42 @@ function utils(Apify){
     return typeof num === 'string' ? parseFloat(num.replace(/(?!-)[^0-9.]/g, '')) : num;
   }
   
-  async function getSpreadsheet({ spreadsheetId, listId, limit }){
+  async function getSpreadsheet({ spreadsheetId, listId, limit, max, start }, filter){
     limit = limit || 0;
     
-    const url = `https://spreadsheets.google.com/feeds/list/${spreadsheetId}/${listId}/public/values?alt=json`; console.log('[MATCHER] Loading Spreadsheet', url);
+    // Generates url
+    let url = [`https://spreadsheets.google.com/feeds/list/${spreadsheetId}/${listId}/public/values?alt=json`];
+    start && url.push('start-index=' + start); max && url.push('max-results=' + max); url = url.join('&');
+    // Fetches the json
+    console.log('[MATCHER] Loading Spreadsheet', url);
     const result = await fetch(url).then(res => res.json());
     let entries = result.feed && result.feed.entry || [];
     
     if(limit)
       entries = entries.slice(0, limit);
       
-    return entries.map(entry => Object.keys(entry).reduce((obj, key) => {
-      const val = entry[key]['$t'];
-      if(!val || !~key.indexOf('gsx$')) return obj;
+    return entries.reduce( (arr, entry) => {
       
-      const newKey = key.replace('gsx$', '').replace(/[-]/g, '');
+      let newEntry = Object.keys(entry).reduce((obj, key) => {
+        const val = entry[key]['$t'];
+        if(!val || !~key.indexOf('gsx$')) return obj;
+        
+        const newKey = key.replace('gsx$', '').replace(/[-]/g, '');
+        
+        return Object.assign(obj, { [newKey]: val });
+      }, {});
       
-      return Object.assign(obj, { [newKey]: val });
-    }, {}));
+      !filter && arr.push(newEntry);
+      
+      newEntry = filter(newEntry);
+      newEntry && arr.push(newEntry);
+      
+      return arr;
+    }, []);
   }
   
-  async function getExchangeRate(currency = 'EUR', fixerKey = '2aec20cdd5d953fe6e52adc2ebb6de54'){
-    const url = `http://data.fixer.io/api/latest?access_key=${fixerKey}&base=${currency}&symbols=USD`; console.log('[MATCHER] Loading Exchange Rate', url);
+  async function getExchangeRate(currency = 'EUR', symbols = 'USD', fixerKey = '2aec20cdd5d953fe6e52adc2ebb6de54'){
+    const url = `http://data.fixer.io/api/latest?access_key=${fixerKey}&base=${currency}&symbols=${symbols}`; console.log('[MATCHER] Loading Exchange Rate', url);
     return await fetch(url)
       .then( res => res.json() )
       .then( json => json.rates );
