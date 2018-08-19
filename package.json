@@ -1,0 +1,21 @@
+{
+  "name": "apifymatcher",
+  "version": "0.0.0",
+  "description": "Super fast Apify Crawler wrapper / helper",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "Apify",
+    "Crawler",
+    "Wrapper"
+  ],
+  "author": "egislook",
+  "license": "ISC",
+  "dependencies": {
+    "node-fetch": "^2.2.0",
+    "proxy-chain": "^0.2.4",
+    "puppeteer": "^1.7.0"
+  }
+}
