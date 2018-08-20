@@ -65,24 +65,33 @@ class Matcher{
     //   console.log('[MATCHER] Exit');
     //   await browser.close();
     // });
-    const pages = [ await add() ];
-    
-    async function pull(){
-      return pages.length ? pages.pop() : await add();
-    }
+    const tabCloseDelay = this.settings.matcher.tabCloseDelay || 120000;
     
     setInterval(async function(){
       const pageList = await browser.pages();
-      const erroredRequestsLength = Object.keys(this.erroredRequests).length;
-      console.log(`[MATCHER] Free Tabs ${pages.length} / ${pageList.length}${erroredRequestsLength && ', ErroredRequests ' + erroredRequestsLength}`);
-    }, 60000);
+      const erroredRequestsLength = Object.keys(this.erroredRequests || {}).length;
+      console.log(`[MATCHER] 
+      
+      Tabs ${pages.length} - ${pageList.length}
+      Requests ${this.initialRequestsAmount} ~ ${this.requestPendingCount()}
+      ErroredRequests ${erroredRequestsLength}
+      `);
+    }.bind(this), this.settings.matcher.delayReport || 30000);
+    
+    const pages = [ await add() ];
+    
+    async function pull(){
+      const pageList = await browser.pages();
+      return pages.length ? pages.pop() : await add();
+    }
     
     async function push(page){
       if(!page) return;
-      //await page.goto('about:blank');
+      if(new Date().getTime() > page.closingTimeAt) return await remove(page);
+      
       page.removeAllListeners('request');
       pages.push(page);
-      this.debug && console.log(`[MATCHER] Free Tabs ${pages.length}`);
+      this.debug && console.log(`[MATCHER] Tab Free - Now ${pages.length}`);
       return;
     }
     
@@ -91,15 +100,18 @@ class Matcher{
     }
     
     async function remove(page){
-      page && await page.close();
+      if(!page) return;
+      await page.goto('about:blank');
+      await page.close();
       const pageList = await browser.pages();
-      console.log(`[MATCHER] Left Tabs ${pageList.length}`);
+      console.log(`[MATCHER] Tab Close - Now ${pageList.length}`);
     }
     
     async function add(){
       const page = await browser.newPage();
+      page.closingTimeAt = new Date().getTime() + tabCloseDelay;
       const pageList = await browser.pages();
-      console.log(`[MATCHER] Open Tabs ${pageList.length}`);
+      console.log(`[MATCHER] Tab Open - Now ${pageList.length}`);
       return page; //pages.push(page);
     }
     
@@ -113,9 +125,7 @@ class Matcher{
     const { initial } = userData || {};
     let page;
     
-    initial
-      ? console.log('[MATCHER] Initial Left', this.initialRequestsAmount-- )
-      : this.requestPendingCount() % 10 && console.log(`[MATCHER] Overall Left ${this.requestPendingCount()}`);
+    initial && this.initialRequestsAmount--;
     
     try{
       this.debug && console.time(`[MATCHER] Opened ${url} in`);
@@ -344,7 +354,7 @@ class Matcher{
     reqQueue = reqQueue || this.requestQueue || global.requestQueue;
     let i, urlObj, url, userData;
     
-    console.log(`[MATCHER] Queuing ${urls.length}`);
+    console.log(`[MATCHER] Queuing ${urls.length} + ${this.requestPendingCount()}`);
     for(i in urls){
       
       urlObj    = typeof urls[i] === 'string' ? { url: urls[i] } : urls[i];
@@ -388,7 +398,7 @@ class Matcher{
     rq = rq || this.requestQueue;
     cr = cr || this.Crawler;
     if(rq.pendingCount) return rq.pendingCount;
-    const count = rq.requestsCache.listDictionary.linkedList.length;
+    const count = rq.requestsCache && rq.requestsCache.listDictionary.linkedList.length || 0;
     if(!cr) return count;
     return count - cr.handledRequestsCount;
   }
