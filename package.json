@@ -1,6 +1,6 @@
 {
   "name": "apifymatcher",
-  "version": "0.0.9",
+  "version": "0.0.10",
   "description": "Super fast Apify Crawler wrapper / helper",
   "main": "index.js",
   "scripts": {
