@@ -372,7 +372,7 @@ class Matcher{
       userData.initial && this.initialRequestsAmount++;
       
       if( (perBatch * batch) < i ){
-        console.log(`[MATCHER] Batched ${perBatch} + ${this.requestPendingCount()}`);
+        console.log(`[MATCHER] Queued ${perBatch * batch} / ${urls.length}`);
         await this.Apify.utils.sleep(delayAfterBatch);
         batch++;
       }
