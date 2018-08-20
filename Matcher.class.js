@@ -70,8 +70,7 @@ class Matcher{
     setInterval(async function(){
       const pageList = await browser.pages();
       const erroredRequestsLength = Object.keys(this.erroredRequests || {}).length;
-      console.log(`[MATCHER] 
-      
+      console.log(`
       Tabs ${pages.length} - ${pageList.length}
       Requests ${this.initialRequestsAmount} ~ ${this.requestPendingCount()}
       ErroredRequests ${erroredRequestsLength}
@@ -111,7 +110,7 @@ class Matcher{
       const page = await browser.newPage();
       page.closingTimeAt = new Date().getTime() + tabCloseDelay;
       const pageList = await browser.pages();
-      console.log(`[MATCHER] Tab Open - Now ${pageList.length}`);
+      console.log(`[MATCHER] Tab Open  - Now ${pageList.length}`);
       return page; //pages.push(page);
     }
     
@@ -354,7 +353,7 @@ class Matcher{
     reqQueue = reqQueue || this.requestQueue || global.requestQueue;
     let i, urlObj, url, userData;
     
-    console.log(`[MATCHER] Queuing ${urls.length} + ${this.requestPendingCount()}`);
+    (this.debug || initial) && console.log(`[MATCHER] Queuing ${urls.length} + ${this.requestPendingCount()}`);
     for(i in urls){
       
       urlObj    = typeof urls[i] === 'string' ? { url: urls[i] } : urls[i];
