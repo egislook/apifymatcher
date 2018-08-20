@@ -108,8 +108,8 @@ class Matcher{
     
     async function launchBrowser(cfg, delay){
       console.log('[MATCHER] Launching Browser');
-      const instance = await puppeteer.launch(cfg);
-      const browser  = instance.createIncognitoBrowserContext ? await instance.createIncognitoBrowserContext() : instance;
+      const browser = await puppeteer.launch(cfg);
+      // const browser  = instance.createIncognitoBrowserContext ? await instance.createIncognitoBrowserContext() : instance;
       browser.closingTimeAt = new Date().getTime() + (delay * 1.5);
       return browser;
     }
@@ -125,7 +125,8 @@ class Matcher{
       
       if(pageList.length <= maxTabs)
         return await add(timeless);
-        
+      
+      console.log(`[MATCHER] Wait for Tab ${pageList.length} - ${maxTabs}`);
       await new Promise( r => setTimeout(r, 5000));
       return pull(timeless);
     }
@@ -225,9 +226,13 @@ class Matcher{
             waitUntil: 'networkidle2',
             timeout: this.settings.crawler.timout || 30000
           });
+          
+          // Check autobot
+          if(await page.$eval('body', body => !!~body.textContent.indexOf('CAPTCHA')))
+            throw('CaptchaError')
             
           this.debug && console.timeEnd(`[MATCHER] Opened ${url} in`);
-          result = await func({ page, request });
+          result = await func({ page, request, matcher: { settings: pageMatchSettings, addResult: this.pageMatcherResult.bind(this) } });
           
           // No result
           if(!result)
@@ -239,7 +244,7 @@ class Matcher{
           
           // Reclaims request
           if(result.reclaim)
-            throw({ name: 'ReclaimError', message: 'Page needs to be reclaimed due request', posibility: 'antibot'});
+            throw({ name: 'ReclaimError', message: 'Page needs to be reclaimed due request', reasion: result.reclaim });
           
           page = await this.Pool.push(page);
         break;
@@ -258,6 +263,10 @@ class Matcher{
       await this.Pool.remove(page);
       console.log(`[MATCHER] Error ${url}`, err);
       console.log(`[MATCHER] Page Closed`, url);
+      
+      if(err === 'CaptchaError')
+        throw('TimeoutError');
+        
       if(this.settings.matcher.delayError){
         console.log(`[MATCHER] after Error Delay ${this.settings.matcher.delayError} ms`);
         await this.Apify.utils.sleep(this.settings.matcher.delayError);
@@ -469,7 +478,7 @@ class Matcher{
   }
   
   async getPuppetterConfig({ useChrome, useApifyProxy, args }){
-    args = args || ['--no-sandbox', '--deterministic-fetch'];
+    args = args || ['--no-sandbox', '--deterministic-fetch', '--unlimited-storage', '--full-memory-crash-report', '--disable-dev-shm-usage'];
     useApifyProxy && args.push(`--proxy-server=${await this.getProxyUrl()}`);
     
     return {
