@@ -62,10 +62,19 @@ function utils(Apify){
   }
   
   async function getExchangeRate(currency = 'EUR', symbols = 'USD', fixerKey = '2aec20cdd5d953fe6e52adc2ebb6de54'){
+    const exchangeRates = {
+      EUR: 1.15,
+      RUB: 0.015,
+      GBP: 1.28,
+    }
     const url = `http://data.fixer.io/api/latest?access_key=${fixerKey}&base=${currency}&symbols=${symbols}`; console.log('[MATCHER] Loading Exchange Rate', url);
-    return await fetch(url)
+    return await fetch(url, { timeout: 10000 })
       .then( res => res.json() )
-      .then( json => json.rates );
+      .then( json => json.rates )
+      .catch( err => {
+        console.log(err);
+        return { USD: exchangeRates[currency] }
+      });
   }
 }
 

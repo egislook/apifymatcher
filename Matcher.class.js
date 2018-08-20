@@ -58,43 +58,81 @@ class Matcher{
   // Initiates puppeteer and creates pool of pages
   async pagePool(puppeteerConfig){
     puppeteerConfig = puppeteerConfig || this.settings.puppeteer;
-    let max = 10;
-    let instance = await puppeteer.launch(await this.getPuppetterConfig(puppeteerConfig));
-    let browser  = instance.createIncognitoBrowserContext ? await instance.createIncognitoBrowserContext() : instance;
+    let max = 10, browser;
+    
     // this.cleanExit( async () => {
     //   console.log('[MATCHER] Exit');
     //   await browser.close();
     // });
-    const tabCloseDelay = this.settings.matcher.tabCloseDelay || 120000;
+    
+    browser = await launchBrowser(await this.getPuppetterConfig(puppeteerConfig), this.settings.matcher.delayBrowserClose || 240000);
+    
+    const delayTabClose = this.settings.matcher.delayTabClose || 120000;
+    const maxTabs       = this.settings.crawler.maxConcurrency; 
     const randomNum     = this.utils.randomNum;
     const randomUA      = this.Apify.utils.getRandomUserAgent;
+    
+    let blockPulling = false;
     
     setInterval(async function(){
       const pageList = await browser.pages();
       const erroredRequestsLength = Object.keys(this.erroredRequests || {}).length;
+      
+      if(maxTabs < pageList.length || browser.closingTimeAt < new Date().getTime())
+        blockPulling = true;
+        
+      if((pageList.length === pages.length || maxTabs < pageList.length) && blockPulling){
+        console.log('[MATCHER] Closing Browser');
+        pageList.forEach( remove );
+        browser = await close();
+        browser = await launchBrowser(await this.getPuppetterConfig(puppeteerConfig), this.settings.matcher.delayBrowserClose || 240000);
+        pages = [ await add() ];
+        blockPulling = false;
+      }
+      
       console.log(`
       Tabs ${pages.length} - ${pageList.length}
       Requests ${this.initialRequestsAmount} ~ ${this.requestPendingCount()}
       ErroredRequests ${erroredRequestsLength}
+      BlockedPolling ${blockPulling} ${browser.closingTimeAt - new Date().getTime()} ms
       `);
       
-      pageList.forEach( page => page.closingTimeAt && new Date().getTime() > (page.closingTimeAt + 10000) && page.close() );
-      
-      
+      //page.closingTimeAt && new Date().getTime() > (page.closingTimeAt + 10000) &&
       // await browser.close();
       // instance = await puppeteer.launch(await this.getPuppetterConfig(puppeteerConfig));
       // browser  = instance.createIncognitoBrowserContext ? await instance.createIncognitoBrowserContext() : instance;
       
     }.bind(this), this.settings.matcher.delayReport || 30000);
     
-    const pages = [ await add() ];
+    let pages = [ await add() ];
+    
+    async function launchBrowser(cfg, delay){
+      console.log('[MATCHER] Launching Browser');
+      const instance = await puppeteer.launch(cfg);
+      const browser  = instance.createIncognitoBrowserContext ? await instance.createIncognitoBrowserContext() : instance;
+      browser.closingTimeAt = new Date().getTime() + (delay * 1.5);
+      return browser;
+    }
     
     async function pull(timeless){
+      while(blockPulling){
+        console.log('WAITING FOR UNBLOCKED PULLING');
+        await new Promise( r => setTimeout(r, 5000));
+      }
       const pageList = await browser.pages();
-      return pages.length && !timeless ? pages.pop() : await add(timeless);
+      if(pages.length && !timeless)
+        return pages.shift();
+      
+      if(pageList.length <= maxTabs)
+        return await add(timeless);
+        
+      await new Promise( r => setTimeout(r, 5000));
+      return pull(timeless);
     }
     
     async function push(page){
+      if(blockPulling)
+        return remove(page);
       if(!page) return;
       if(new Date().getTime() > page.closingTimeAt) return await remove(page);
       
@@ -105,7 +143,9 @@ class Matcher{
     }
     
     async function close(){
-      return await browser.close();
+      pages = []; 
+      await browser.close();
+      return;
     }
     
     async function remove(page){
@@ -119,7 +159,7 @@ class Matcher{
     async function add(timeless){
       const page = await browser.newPage();
       await page.setUserAgent(randomUA());
-      !timeless ? page.closingTimeAt = new Date().getTime() + tabCloseDelay + randomNum(tabCloseDelay) : null;
+      !timeless ? page.closingTimeAt = new Date().getTime() + delayTabClose + randomNum(delayTabClose) : null;
       const pageList = await browser.pages();
       console.log(`[MATCHER] Tab Open  - Now ${pageList.length}`);
       return page; //pages.push(page);
@@ -265,7 +305,7 @@ class Matcher{
     status      = `${status}__${host}__${new Date().getTime()}`;
     //await shot(page, host);
     page && takeShot && this.debug && await this.utils.shot(page, status);
-    await this.Apify.setValue(status, { status, error: errorMessages && errorMessages.join(' ') || error, url });
+    await this.Apify.setValue(status, { status, error, url });
     return;
   }
   
