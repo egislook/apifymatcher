@@ -188,7 +188,7 @@ class Matcher{
             return await this.handleFailedRequest({ request, page }, 'result_error', result.error, true);
           
           // Reclaims request
-          if(result.reclaim && retryCount < this.settings.crawler.maxRequestRetries)
+          if(result.reclaim)
             throw({ name: 'ReclaimError', message: 'Page needs to be reclaimed due request', posibility: 'antibot'});
           
           page = await this.Pool.push(page);
