@@ -59,14 +59,15 @@ class Matcher{
   async pagePool(puppeteerConfig){
     puppeteerConfig = puppeteerConfig || this.settings.puppeteer;
     let max = 10;
-    const instance = await puppeteer.launch(await this.getPuppetterConfig(puppeteerConfig));
-    const browser  = instance.createIncognitoBrowserContext ? await instance.createIncognitoBrowserContext() : instance;
+    let instance = await puppeteer.launch(await this.getPuppetterConfig(puppeteerConfig));
+    let browser  = instance.createIncognitoBrowserContext ? await instance.createIncognitoBrowserContext() : instance;
     // this.cleanExit( async () => {
     //   console.log('[MATCHER] Exit');
     //   await browser.close();
     // });
     const tabCloseDelay = this.settings.matcher.tabCloseDelay || 120000;
     const randomNum     = this.utils.randomNum;
+    const randomUA      = this.Apify.utils.getRandomUserAgent;
     
     setInterval(async function(){
       const pageList = await browser.pages();
@@ -76,13 +77,21 @@ class Matcher{
       Requests ${this.initialRequestsAmount} ~ ${this.requestPendingCount()}
       ErroredRequests ${erroredRequestsLength}
       `);
+      
+      pageList.forEach( page => page.closingTimeAt && new Date().getTime() > (page.closingTimeAt + 10000) && page.close() );
+      
+      
+      // await browser.close();
+      // instance = await puppeteer.launch(await this.getPuppetterConfig(puppeteerConfig));
+      // browser  = instance.createIncognitoBrowserContext ? await instance.createIncognitoBrowserContext() : instance;
+      
     }.bind(this), this.settings.matcher.delayReport || 30000);
     
     const pages = [ await add() ];
     
-    async function pull(){
+    async function pull(timeless){
       const pageList = await browser.pages();
-      return pages.length ? pages.pop() : await add();
+      return pages.length && !timeless ? pages.pop() : await add(timeless);
     }
     
     async function push(page){
@@ -107,9 +116,10 @@ class Matcher{
       console.log(`[MATCHER] Tab Close - Now ${pageList.length}`);
     }
     
-    async function add(){
+    async function add(timeless){
       const page = await browser.newPage();
-      page.closingTimeAt = new Date().getTime() + tabCloseDelay + randomNum(tabCloseDelay);
+      await page.setUserAgent(randomUA());
+      !timeless ? page.closingTimeAt = new Date().getTime() + tabCloseDelay + randomNum(tabCloseDelay) : null;
       const pageList = await browser.pages();
       console.log(`[MATCHER] Tab Open  - Now ${pageList.length}`);
       return page; //pages.push(page);
