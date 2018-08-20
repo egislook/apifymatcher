@@ -188,11 +188,8 @@ class Matcher{
             return await this.handleFailedRequest({ request, page }, 'result_error', result.error, true);
           
           // Reclaims request
-          // if(result.reclaim && retryCount < this.settings.crawler.maxRequestRetries){
-          //   await page.goto(url, { waitUntil: 'networkidle2' });
-          //   this.debug && console.log(`[MATCHER] Reclaimed ${url}`);
-          //   return;
-          // }
+          if(result.reclaim && retryCount < this.settings.crawler.maxRequestRetries)
+            throw({ name: 'ReclaimError', message: 'Page needs to be reclaimed due request', posibility: 'antibot'});
           
           page = await this.Pool.push(page);
         break;
@@ -227,6 +224,8 @@ class Matcher{
         case 'ApifyError':
         case 'TimeoutError':
           throw(err);
+        case 'ReclaimError':
+          throw('TimeoutError');
         default:
           return await this.handleFailedRequest({ request }, err.name ? err.name : 'error_cought', err);
       }
@@ -361,6 +360,8 @@ class Matcher{
       urlObj    = typeof urls[i] === 'string' ? { url: urls[i] } : urls[i];
       url       = urlObj.url;
       userData  = urlObj.userData ? { ...urlObj.userData, initial } : { ...urlObj, initial };
+      
+      delete userData.reclaim;
       
       if(initial){
         delete userData.url;
