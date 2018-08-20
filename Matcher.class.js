@@ -66,6 +66,7 @@ class Matcher{
     //   await browser.close();
     // });
     const tabCloseDelay = this.settings.matcher.tabCloseDelay || 120000;
+    const randomNum     = this.utils.randomNum;
     
     setInterval(async function(){
       const pageList = await browser.pages();
@@ -108,7 +109,7 @@ class Matcher{
     
     async function add(){
       const page = await browser.newPage();
-      page.closingTimeAt = new Date().getTime() + tabCloseDelay;
+      page.closingTimeAt = new Date().getTime() + tabCloseDelay + randomNum(tabCloseDelay);
       const pageList = await browser.pages();
       console.log(`[MATCHER] Tab Open  - Now ${pageList.length}`);
       return page; //pages.push(page);
@@ -352,8 +353,9 @@ class Matcher{
       
     reqQueue = reqQueue || this.requestQueue || global.requestQueue;
     let i, urlObj, url, userData;
+    let batch = 1, perBatch = 100, delayAfterBatch = 5000;
     
-    (this.debug || initial) && console.log(`[MATCHER] Queuing ${urls.length} + ${this.requestPendingCount()}`);
+    console.log(`[MATCHER] Queuing ${urls.length} + ${this.requestPendingCount()}`);
     for(i in urls){
       
       urlObj    = typeof urls[i] === 'string' ? { url: urls[i] } : urls[i];
@@ -368,6 +370,12 @@ class Matcher{
       await reqQueue.addRequest(new this.Apify.Request({ url, userData }));
       this.debug && console.log(`[MATCHER] Queued ${this.requestPendingCount()}`, url, { userDataSize: Object.keys(userData).length });
       userData.initial && this.initialRequestsAmount++;
+      
+      if( (perBatch * batch) < i ){
+        console.log(`[MATCHER] Batched ${perBatch} + ${this.requestPendingCount()}`);
+        await this.Apify.utils.sleep(delayAfterBatch);
+        batch++;
+      }
     }
   }
   

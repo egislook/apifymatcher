@@ -8,6 +8,7 @@ function utils(Apify){
     shot,
     clearText,
     clearNum,
+    randomNum,
     getSpreadsheet,
     getExchangeRate
   }
@@ -25,6 +26,10 @@ function utils(Apify){
   
   function clearNum(num){
     return typeof num === 'string' ? parseFloat(num.replace(/(?!-)[^0-9.]/g, '')) : num;
+  }
+  
+  function randomNum(start = 0, end = 1){
+    return Math.floor(Math.random() * end) + start;
   }
   
   async function getSpreadsheet({ spreadsheetId, listId, max, start }, filterFn){
