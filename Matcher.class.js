@@ -124,19 +124,14 @@ class Matcher{
       if(pages.length && !timeless)
         return pages.shift();
       
-      const pageList = await browser.pages();
-      if(pageList.length < maxTabs)
-        return await add(timeless);
-      
-      console.log(`[MATCHER] Wait for Tab ${await browser.pages().length} - ${maxTabs}`);
-      await new Promise( r => setTimeout(r, 5000));
-      return pull(timeless);
+      return await add(timeless);
     }
     
     async function push(page){
-      if(blockPulling)
-        return remove(page);
       if(!page) return;
+      if(blockPulling || await browser.pages().length < maxTabs)
+        return remove(page);
+      
       if(new Date().getTime() > page.closingTimeAt) return await remove(page);
       
       page.removeAllListeners('request');
