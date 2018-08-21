@@ -124,7 +124,7 @@ class Matcher{
       if(pages.length && !timeless)
         return pages.shift();
       
-      if(pageList.length <= maxTabs)
+      if(pageList.length < maxTabs)
         return await add(timeless);
       
       console.log(`[MATCHER] Wait for Tab ${pageList.length} - ${maxTabs}`);
