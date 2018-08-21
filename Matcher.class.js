@@ -78,12 +78,13 @@ class Matcher{
       const pageList = await browser.pages();
       const erroredRequestsLength = Object.keys(this.erroredRequests || {}).length;
       
-      if(maxTabs < pageList.length || browser.closingTimeAt < new Date().getTime() && !blockPulling)
+      if(browser.closingTimeAt < new Date().getTime())
         blockPulling = 1;
         
-      if((pageList.length === pages.length || maxTabs < pageList.length || (blockPulling > maxTabs * 4)) && blockPulling){
-        console.log('[MATCHER] Closing Browser');
+      if((pageList.length === pages.length || (browser.closingTimeAt + 30000) < new Date().getTime()) && blockPulling){
+        console.log('[MATCHER] Closing Browser | ' + maxTabs);
         pageList.forEach( remove );
+        await new Promise(r => setTimeout(r, 2000));
         browser = await close();
         browser = await launchBrowser(await this.getPuppetterConfig(puppeteerConfig), this.settings.matcher.delayBrowserClose || 240000);
         pages = [ await add() ];
@@ -116,18 +117,18 @@ class Matcher{
     
     async function pull(timeless){
       while(blockPulling){
-        blockPulling++;
-        console.log('WAITING FOR UNBLOCKED PULLING ' + blockPulling);
+        console.log('WAITING FOR UNBLOCKED PULLING');
         await new Promise( r => setTimeout(r, 5000));
       }
-      const pageList = await browser.pages();
+      
       if(pages.length && !timeless)
         return pages.shift();
       
+      const pageList = await browser.pages();
       if(pageList.length < maxTabs)
         return await add(timeless);
       
-      console.log(`[MATCHER] Wait for Tab ${pageList.length} - ${maxTabs}`);
+      console.log(`[MATCHER] Wait for Tab ${await browser.pages().length} - ${maxTabs}`);
       await new Promise( r => setTimeout(r, 5000));
       return pull(timeless);
     }
