@@ -91,7 +91,7 @@ class Matcher{
       }
       
       console.log(`
-      Tabs ${pages.length} - ${pageList.length}
+      Tabs ${pages.length} - ${pageList.length} - ${maxTabs}
       Requests ${this.initialRequestsAmount} ~ ${this.requestPendingCount()}
       ErroredRequests ${erroredRequestsLength}
       BlockedPolling ${blockPulling} ${browser.closingTimeAt - new Date().getTime()} ms
