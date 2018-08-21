@@ -50,6 +50,7 @@ class Matcher{
     // Collects errored pages to object at counts the retries
     this.erroredRequests = {};
     this.initialRequestsAmount = 0;
+    this.urlDisplayLength = 100;
   }
   
   
@@ -80,8 +81,10 @@ class Matcher{
       
       if(browser.closingTimeAt < new Date().getTime())
         blockPulling = 1;
+      
+      const timeoutForBrowserClose = (browser.closingTimeAt + ((this.settings.crawler.timout || 30000) * 2) ) < new Date().getTime();
         
-      if((pageList.length === pages.length || (browser.closingTimeAt + 30000) < new Date().getTime()) && blockPulling){
+      if((pageList.length === pages.length || timeoutForBrowserClose) && blockPulling){
         console.log('[MATCHER] Closing Browser | ' + maxTabs);
         pageList.forEach( remove );
         await new Promise(r => setTimeout(r, 2000));
@@ -176,18 +179,21 @@ class Matcher{
     initial && this.initialRequestsAmount--;
     
     try{
-      this.debug && console.time(`[MATCHER] Opened ${url} in`);
+      this.debug && console.time(`[MATCHER] Opened ${this.utils.trunc(url, this.urlDisplayLength, true)} in`);
     
       const pageMatchSettings = this.getPageMatchSettings(request) || {};
-      const { err, msg, func } = pageMatchSettings;
+      const { err, msg, func, status } = pageMatchSettings;
       // These settings can be specified for every page or for pageMatcher
       const blockResources  = userData.blockResources !== undefined ? userData.blockResources : pageMatchSettings.blockResources;
       const noRedirects     = userData.noRedirects !== undefined    ? userData.noRedirects    : pageMatchSettings.noRedirects;
       const useFetch        = userData.useFetch !== undefined       ? userData.useFetch       : pageMatchSettings.useFetch;
       const clearCookies    = userData.clearCookies !== undefined   ? userData.clearCookies   : pageMatchSettings.clearCookies;
       
-      if(err) 
+      if(err)
         return await this.handleFailedRequest({ request }, err, msg);
+      
+      if(status)
+        return console.log(`[MATCHER] ${status} ${msg} ${this.utils.trunc(url, this.urlDisplayLength, true)}`);
       
       let result;
       switch(useFetch){
@@ -199,7 +205,7 @@ class Matcher{
           const json = await fetch(url).then(res => res[typeof useFetch === 'string' ? useFetch : 'json']());
           result = func ? await func({ page: { json }, request }) : json;
           
-          this.debug && console.timeEnd(`[MATCHER] Opened ${url} in`);
+          this.debug && console.timeEnd(`[MATCHER] Opened ${this.utils.trunc(url, this.urlDisplayLength, true)} in`);
         break;
         
         // Use Puppetter or more complex tasks
@@ -218,7 +224,7 @@ class Matcher{
           }
           
           // Go to page
-          this.debug && console.log(`[MATCHER] Opening ${url}...`);
+          this.debug && console.log(`[MATCHER] Opening ${this.utils.trunc(url, this.urlDisplayLength, true)}`);
           await page.goto(url, { 
             waitUntil: 'networkidle2',
             timeout: this.settings.crawler.timout || 30000
@@ -228,7 +234,7 @@ class Matcher{
           if(await page.$eval('body', body => !!~body.textContent.indexOf('CAPTCHA')))
             throw('CaptchaError')
             
-          this.debug && console.timeEnd(`[MATCHER] Opened ${url} in`);
+          this.debug && console.timeEnd(`[MATCHER] Opened ${this.utils.trunc(url, this.urlDisplayLength, true)} in`);
           result = await func({ page, request, matcher: { settings: pageMatchSettings, addResult: this.pageMatcherResult.bind(this) } });
           
           // No result
@@ -258,8 +264,8 @@ class Matcher{
     } catch(err) {
       
       await this.Pool.remove(page);
-      console.log(`[MATCHER] Error ${url}`, err);
-      console.log(`[MATCHER] Page Closed`, url);
+      console.log(`[MATCHER] ${this.utils.trunc(url, this.urlDisplayLength, true)}`, err);
+      console.log(`[MATCHER] Page Closed`, this.utils.trunc(url, this.urlDisplayLength, true));
       
       if(err === 'CaptchaError')
         throw('TimeoutError');
@@ -320,15 +326,18 @@ class Matcher{
    */
   // Deals with different result types
   async pageMatcherResult(result, { template, skipUrls, limit, showSkip }){
-    const { skip, urls } = result || {};
+    const { skip, urls, status } = result || {};
     
     // Add urls to queue
     if(!skipUrls && urls)
       await this.queueUrls(result.urls, this.requestQueue, limit);
     
     // Skip result
-    if(skip)
+    if(skip || status === 'done')
       return showSkip && this.debug && console.log('[MATCHER] Skipping', result);
+    
+    if(status)
+      this.debug && console.log('[MATCHER] Result', status);
     
     // Generate template
     if(template)
@@ -342,11 +351,20 @@ class Matcher{
   getPageMatchSettings({ userData, url }){
     const { matcherLabel } = userData;
     
-    const pageMatch = this.pageMatcherData.find(
+    let pageMatch = this.pageMatcherData.find(
       matcher => matcherLabel 
         ? matcher.label === matcherLabel 
         : matcher.url === url || matcher.match instanceof Array ? matcher.match.filter( m => url.includes(m) ).length : url.includes(matcher.match)
     );
+    
+    if(!pageMatch){
+      pageMatch = this.pageMatcherData.find( matcher => 
+        matcher.ignoreMatch === url || 
+        matcher.ignoreMatch instanceof Array ? matcher.ignoreMatch.filter( m => url.includes(m) ).length : url.includes(matcher.ignoreMatch)
+      )
+      if(pageMatch)
+        return { status: 'ignore_match', msg: 'ignoreMatch is matching the url' }
+    }
     
     if(!pageMatch || !pageMatch.func)
       return { err: 'missing_page_setting', msg: 'Missing PageMatcher setting for this page' };
@@ -425,7 +443,7 @@ class Matcher{
       }
       
       await reqQueue.addRequest(new this.Apify.Request({ url, userData }));
-      this.debug && console.log(`[MATCHER] Queued ${this.requestPendingCount()}`, url, { userDataSize: Object.keys(userData).length });
+      this.debug && console.log(`[MATCHER] Queued ${this.requestPendingCount()}`, this.utils.trunc(url, this.urlDisplayLength, true), { userDataSize: Object.keys(userData).length });
       userData.initial && this.initialRequestsAmount++;
       
       if( (perBatch * batch) < i ){

@@ -8,9 +8,10 @@ function utils(Apify){
     shot,
     clearText,
     clearNum,
+    trunc,
     randomNum,
     getSpreadsheet,
-    getExchangeRate
+    getExchangeRate,
   }
   
   async function shot(p, h){
@@ -30,6 +31,12 @@ function utils(Apify){
   
   function randomNum(start = 0, end = 1){
     return Math.floor(Math.random() * end) + start;
+  }
+  
+  function trunc(str, length, isUrl, tail = ' ...'){
+    if(!str instanceof String) return str;
+    const newStr = isUrl ? encodeURI(str) : str;
+    return length && newStr.length > length ? (newStr.substring(0, length) + tail) : newStr;
   }
   
   async function getSpreadsheet({ spreadsheetId, listId, max, start }, filterFn){
