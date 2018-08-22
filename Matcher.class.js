@@ -182,7 +182,7 @@ class Matcher{
     this.requestAmount++;
     this.requestWeight++;
     
-    const delayRequest = this.delayPage * this.requestWeight * (this.requestWeight * 0.3);
+    const delayRequest = this.delayPage * this.requestWeight;
     console.log(`[MATCHER] Request ${this.requestWeight} Delay ${delayRequest} ms`)
     await new Promise(r => setTimeout(r, delayRequest ));
     
@@ -196,7 +196,6 @@ class Matcher{
       const noRedirects     = userData.noRedirects !== undefined    ? userData.noRedirects    : pageMatchSettings.noRedirects;
       const useFetch        = userData.useFetch !== undefined       ? userData.useFetch       : pageMatchSettings.useFetch;
       const clearCookies    = userData.clearCookies !== undefined   ? userData.clearCookies   : pageMatchSettings.clearCookies;
-      this.debug && console.log('[MATCHER] BLOCK RESOURCES', blockResources, url);
       
       if(err)
         return await this.handleFailedRequest({ request }, err, msg);
@@ -248,11 +247,11 @@ class Matcher{
           this.debug && console.timeEnd(`[MATCHER] Opened ${this.utils.trunc(url, this.urlDisplayLength, true)} in`);
           result = await func({ page, request, matcher: { settings: pageMatchSettings, addResult: this.pageMatcherResult.bind(this) } });
           // Reclaims request
-          if(result && result.reclaim)
-            throw({ name: 'ReclaimError', message: 'Page needs to be reclaimed due request', skipRetries: result.skipRetries, reasion: result.reclaim });
-          
           this.requestAmount--;
           this.requestWeight = this.requestWeight - 2 > 0 && this.requestWeight - 2 || 0;
+          
+          if(result && result.reclaim)
+            throw({ name: 'ReclaimError', message: 'Page needs to be reclaimed due request', skipRetries: result.skipRetries, reasion: result.reclaim });
           
           // No result
           if(!result)
