@@ -6,6 +6,7 @@ function utils(Apify){
   
   return {
     shot,
+    error,
     clearText,
     clearNum,
     trunc,
@@ -16,9 +17,18 @@ function utils(Apify){
   
   async function shot(p, h){
     h = h || 'local';
-    const name = `shot__${h}_${new Date().getTime()}.png`;
+    const name = `${h}_${new Date().getTime()}.png`;
     await Apify.setValue(name, await p.screenshot({ fullPage: true }), { contentType: 'image/png' });
     console.log('[MATCHER] Screenshot', name);
+  }
+  
+  async function error({ request: { url, errorMessages }, page }, status = 'request_timeout', error, takeShot){
+    const host  = url.match(/^https?\:\/\/([^\/?#]+)(?:[\/?#]|$)/i)[1];
+    status      = `${status}_${host}__${new Date().getTime()}`;
+    //await shot(page, host);
+    page && takeShot && await shot(page, status);
+    await Apify.setValue(status, { status, error, url });
+    return;
   }
   
   function clearText(text){
@@ -75,7 +85,7 @@ function utils(Apify){
       GBP: 1.28,
     }
     const url = `http://data.fixer.io/api/latest?access_key=${fixerKey}&base=${currency}&symbols=${symbols}`; console.log('[MATCHER] Loading Exchange Rate', url);
-    return await fetch(url, { timeout: 10000 })
+    return await fetch(url, { timeout: 5000 })
       .then( res => res.json() )
       .then( json => json.rates )
       .catch( err => {

@@ -51,6 +51,8 @@ class Matcher{
     this.erroredRequests = {};
     this.initialRequestsAmount = 0;
     this.urlDisplayLength = 100;
+    this.requestAmount = 0;
+    this.requestWeight = 0;
   }
   
   
@@ -59,14 +61,6 @@ class Matcher{
   // Initiates puppeteer and creates pool of pages
   async pagePool(puppeteerConfig){
     puppeteerConfig = puppeteerConfig || this.settings.puppeteer;
-    let max = 10, browser;
-    
-    // this.cleanExit( async () => {
-    //   console.log('[MATCHER] Exit');
-    //   await browser.close();
-    // });
-    
-    browser = await launchBrowser(await this.getPuppetterConfig(puppeteerConfig), this.settings.matcher.delayBrowserClose || 240000);
     
     const delayTabClose = this.settings.matcher.delayTabClose || 120000;
     const maxTabs       = this.settings.crawler.maxConcurrency; 
@@ -75,7 +69,15 @@ class Matcher{
     
     let blockPulling = false;
     
-    setInterval(async function(){
+    let browser = await launchBrowser(await this.getPuppetterConfig(puppeteerConfig), this.settings.matcher.delayBrowserClose || 240000, randomUA());
+    
+    let pages = await browser.pages();
+        pages.forEach( remove );
+        pages = [ await add() ];
+    
+    setInterval(reportPool.bind(this), this.settings.matcher.delayReport || 30000);
+    
+    async function reportPool(){
       const pageList = await browser.pages();
       const erroredRequestsLength = Object.keys(this.erroredRequests || {}).length;
       
@@ -85,13 +87,17 @@ class Matcher{
       const timeoutForBrowserClose = (browser.closingTimeAt + ((this.settings.crawler.timout || 30000) * 2) ) < new Date().getTime();
         
       if((pageList.length === pages.length || timeoutForBrowserClose) && blockPulling){
-        console.log('[MATCHER] Closing Browser | ' + maxTabs);
+        console.log('[MATCHER] Closing Browser | ' + maxTabs, { forced: timeoutForBrowserClose });
         pageList.forEach( remove );
         await new Promise(r => setTimeout(r, 2000));
         browser = await close();
-        browser = await launchBrowser(await this.getPuppetterConfig(puppeteerConfig), this.settings.matcher.delayBrowserClose || 240000);
+        browser = await launchBrowser(await this.getPuppetterConfig(puppeteerConfig), this.settings.matcher.delayBrowserClose || 240000, randomUA());
+        pages = await browser.pages();
+        pages.forEach( remove );
         pages = [ await add() ];
         blockPulling = 0;
+        this.requestAmount = 0;
+        this.requestWeight = 2;
       }
       
       console.log(`
@@ -101,18 +107,13 @@ class Matcher{
       BlockedPolling ${blockPulling} ${browser.closingTimeAt - new Date().getTime()} ms
       `);
       
-      //page.closingTimeAt && new Date().getTime() > (page.closingTimeAt + 10000) &&
-      // await browser.close();
-      // instance = await puppeteer.launch(await this.getPuppetterConfig(puppeteerConfig));
-      // browser  = instance.createIncognitoBrowserContext ? await instance.createIncognitoBrowserContext() : instance;
-      
-    }.bind(this), this.settings.matcher.delayReport || 30000);
+    }
     
-    let pages = [ await add() ];
     
-    async function launchBrowser(cfg, delay){
+    async function launchBrowser(cfg, delay, userAgent){
       console.log('[MATCHER] Launching Browser');
       const browser = await puppeteer.launch(cfg);
+      userAgent && browser.userAgent(userAgent);
       // const browser  = instance.createIncognitoBrowserContext ? await instance.createIncognitoBrowserContext() : instance;
       browser.closingTimeAt = new Date().getTime() + (delay * 1.5);
       return browser;
@@ -124,7 +125,7 @@ class Matcher{
         await new Promise( r => setTimeout(r, 5000));
       }
       
-      if(pages.length && !timeless)
+      if(pages.length)
         return pages.shift();
       
       return await add(timeless);
@@ -160,7 +161,8 @@ class Matcher{
     async function add(timeless){
       const page = await browser.newPage();
       await page.setUserAgent(randomUA());
-      !timeless ? page.closingTimeAt = new Date().getTime() + delayTabClose + randomNum(delayTabClose) : null;
+      page.closingTimeAt = new Date().getTime() + delayTabClose + randomNum(delayTabClose);
+      page.browserClosingTimeAt = browser.closingTimeAt;
       const pageList = await browser.pages();
       console.log(`[MATCHER] Tab Open  - Now ${pageList.length}`);
       return page; //pages.push(page);
@@ -177,6 +179,12 @@ class Matcher{
     let page;
     
     initial && this.initialRequestsAmount--;
+    this.requestAmount++;
+    this.requestWeight++;
+    
+    const delayRequest = this.delayPage * this.requestWeight * (this.requestWeight * 0.3);
+    console.log(`[MATCHER] Request ${this.requestWeight} Delay ${delayRequest} ms`)
+    await new Promise(r => setTimeout(r, delayRequest ));
     
     try{
       this.debug && console.time(`[MATCHER] Opened ${this.utils.trunc(url, this.urlDisplayLength, true)} in`);
@@ -188,6 +196,7 @@ class Matcher{
       const noRedirects     = userData.noRedirects !== undefined    ? userData.noRedirects    : pageMatchSettings.noRedirects;
       const useFetch        = userData.useFetch !== undefined       ? userData.useFetch       : pageMatchSettings.useFetch;
       const clearCookies    = userData.clearCookies !== undefined   ? userData.clearCookies   : pageMatchSettings.clearCookies;
+      this.debug && console.log('[MATCHER] BLOCK RESOURCES', blockResources, url);
       
       if(err)
         return await this.handleFailedRequest({ request }, err, msg);
@@ -205,6 +214,8 @@ class Matcher{
           const json = await fetch(url).then(res => res[typeof useFetch === 'string' ? useFetch : 'json']());
           result = func ? await func({ page: { json }, request }) : json;
           
+          this.requestAmount--;
+          this.requestWeight = this.requestWeight - 2 > 0 && this.requestWeight - 2 || 0;
           this.debug && console.timeEnd(`[MATCHER] Opened ${this.utils.trunc(url, this.urlDisplayLength, true)} in`);
         break;
         
@@ -231,41 +242,40 @@ class Matcher{
           });
           
           // Check autobot
-          if(await page.$eval('body', body => !!~body.textContent.indexOf('CAPTCHA')))
+          if(await page.$eval('body', body => ["с вашего IP-адреса", 'CAPTCHA'].find( str => !!~body.textContent.indexOf(str)) ))
             throw('CaptchaError')
             
           this.debug && console.timeEnd(`[MATCHER] Opened ${this.utils.trunc(url, this.urlDisplayLength, true)} in`);
           result = await func({ page, request, matcher: { settings: pageMatchSettings, addResult: this.pageMatcherResult.bind(this) } });
+          // Reclaims request
+          if(result && result.reclaim)
+            throw({ name: 'ReclaimError', message: 'Page needs to be reclaimed due request', skipRetries: result.skipRetries, reasion: result.reclaim });
+          
+          this.requestAmount--;
+          this.requestWeight = this.requestWeight - 2 > 0 && this.requestWeight - 2 || 0;
           
           // No result
           if(!result)
             return await this.handleFailedRequest({ request, page }, 'result_empty', 'Empty page result returned', true);
-            
+          
           // Error inside result
           if(result.error)
             return await this.handleFailedRequest({ request, page }, 'result_error', result.error, true);
-          
-          // Reclaims request
-          if(result.reclaim)
-            throw({ name: 'ReclaimError', message: 'Page needs to be reclaimed due request', reasion: result.reclaim });
           
           page = await this.Pool.push(page);
         break;
           
       }
       
-      await this.pageMatcherResult(result, pageMatchSettings);
-      
-      // this.debug && console.log(result);
-      // try{ } catch(err) { this.debug && console.log(err) }
-      this.delayPage && await this.Apify.utils.sleep(this.delayPage);
-      return;
+      // Clomplete the request
+      return await this.pageMatcherResult(result, pageMatchSettings);
       
     } catch(err) {
+      this.requestAmount--;
+      this.requestWeight++;
       
       await this.Pool.remove(page);
-      console.log(`[MATCHER] ${this.utils.trunc(url, this.urlDisplayLength, true)}`, err);
-      console.log(`[MATCHER] Page Closed`, this.utils.trunc(url, this.urlDisplayLength, true));
+      console.log(`[MATCHER]`, err, this.utils.trunc(url, this.urlDisplayLength, true));
       
       if(err === 'CaptchaError')
         throw('TimeoutError');
@@ -275,12 +285,14 @@ class Matcher{
         await this.Apify.utils.sleep(this.settings.matcher.delayError);
       }
       
-      const retriesLeft = this.settings.crawler.maxRequestRetries - this.addErroredRequest(request, err);
-      !(retriesLeft < 0) && console.log(`[MATCHER] Retries Left`, retriesLeft, url);
-      if(retriesLeft < 0)
-        return await this.handleFailedRequest({ request }, 'request_removed', err);
-        
-      initial && this.initialRequestsAmount++;
+      if(!err.skipRetries){
+        const retriesLeft = this.settings.crawler.maxRequestRetries - this.addErroredRequest(request, err);
+        !(retriesLeft < 0) && console.log(`[MATCHER] Retries Left`, retriesLeft, url);
+        if(retriesLeft < 0)
+          return await this.handleFailedRequest({ request }, 'request_removed', err);
+          
+        initial && this.initialRequestsAmount++;
+      }
       
       switch(err.name){
         case 'ApifyError':
