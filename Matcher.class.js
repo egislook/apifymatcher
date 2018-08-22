@@ -182,9 +182,9 @@ class Matcher{
     this.requestAmount++;
     this.requestWeight++;
     
-    const delayRequest = this.delayPage * this.requestWeight;
-    console.log(`[MATCHER] Request ${this.requestWeight} Delay ${delayRequest} ms`)
-    await new Promise(r => setTimeout(r, delayRequest ));
+    // const delayRequest = this.delayPage * this.requestWeight;
+    // console.log(`[MATCHER] Request ${this.requestWeight} Delay ${delayRequest} ms`)
+    // await new Promise(r => setTimeout(r, delayRequest ));
     
     try{
       this.debug && console.time(`[MATCHER] Opened ${this.utils.trunc(url, this.urlDisplayLength, true)} in`);
@@ -267,7 +267,9 @@ class Matcher{
       }
       
       // Clomplete the request
-      return await this.pageMatcherResult(result, pageMatchSettings);
+      await this.pageMatcherResult(result, pageMatchSettings);
+      await new Promise(r => setTimeout(r, this.delayPage ));
+      return
       
     } catch(err) {
       this.requestAmount--;
