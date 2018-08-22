@@ -13,6 +13,7 @@ function utils(Apify){
     randomNum,
     getSpreadsheet,
     getExchangeRate,
+    queueUrls,
   }
   
   async function shot(p, h){
@@ -29,6 +30,23 @@ function utils(Apify){
     page && takeShot && await shot(page, status);
     await Apify.setValue(status, { status, error, url });
     return;
+  }
+  
+  async function queueUrls(urls, reqQueue, limit){
+  
+    if(limit)
+      urls = urls.slice(0, limit);
+      
+    reqQueue = reqQueue || global.requestQueue;
+    let i, urlObj, url, userData;
+    
+    for(i in urls){
+      urlObj    = typeof urls[i] === 'string' ? { url: urls[i] } : urls[i];
+      url       = urlObj.url;
+      userData  = urlObj.userData || { ...urlObj };
+      await reqQueue.addRequest(new Apify.Request({ url, userData }));
+      console.log(`[MATCHER] ${urls.length - i} Left. Add to Queue`, url, { userDataSize: Object.keys(userData).length });
+    }
   }
   
   function clearText(text){
