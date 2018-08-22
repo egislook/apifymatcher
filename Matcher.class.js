@@ -182,7 +182,6 @@ class Matcher{
     this.requestAmount++;
     this.requestWeight++;
     
-    // const delayRequest = this.delayPage * this.requestWeight;
     // console.log(`[MATCHER] Request ${this.requestWeight} Delay ${delayRequest} ms`)
     // await new Promise(r => setTimeout(r, delayRequest ));
     
@@ -266,10 +265,12 @@ class Matcher{
           
       }
       
+      const delayRequest = this.delayPage * this.requestWeight;
       // Clomplete the request
       await this.pageMatcherResult(result, pageMatchSettings);
-      await new Promise(r => setTimeout(r, this.delayPage ));
-      return
+      console.log('[MATCHER] Request Next in', delayRequest, 'ms', this.requestWeight);
+      await this.Apify.utils.sleep(delayRequest);
+      return;
       
     } catch(err) {
       this.requestAmount--;
