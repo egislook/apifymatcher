@@ -1,6 +1,7 @@
 const puppeteer   = global.puppeteer || require(require.resolve('puppeteer'));
 const proxyChain  = require('proxy-chain');
 const fetch       = require('node-fetch');
+const jsdom       = require('jsdom');
 const utils       = require('./utils.js');
 
 /** TODO
@@ -66,6 +67,7 @@ class Matcher{
     const maxTabs       = this.settings.crawler.maxConcurrency; 
     const randomNum     = this.utils.randomNum;
     const randomUA      = this.Apify.utils.getRandomUserAgent;
+    this.requestWeight  = this.requestWeight > 50 ? 50  : this.requestWeight;
     
     let blockPulling = false;
     
@@ -74,6 +76,8 @@ class Matcher{
     let pages = await browser.pages();
         pages.forEach( remove );
         pages = [ await add() ];
+        
+    const delayRequest = () => this.delayPage * this.requestWeight;
     
     setInterval(reportPool.bind(this), this.settings.matcher.delayReport || 30000);
     
@@ -97,7 +101,6 @@ class Matcher{
         pages = [ await add() ];
         blockPulling = 0;
         this.requestAmount = 0;
-        this.requestWeight = 2;
       }
       
       console.log(`
@@ -121,8 +124,9 @@ class Matcher{
     
     async function pull(timeless){
       while(blockPulling){
+        this.requestWeight++;
         console.log('WAITING FOR UNBLOCKED PULLING');
-        await new Promise( r => setTimeout(r, 5000));
+        await new Promise(r => setTimeout(r, delayRequest()));
       }
       
       if(pages.length)
@@ -205,11 +209,40 @@ class Matcher{
       let result;
       switch(useFetch){
         
+        // Use JsDom for quick dom evaluation
+        case 'dom':
+          const jsdomData = {};
+          const JSDOM = new jsdom.JSDOM();
+          
+          class CustomResourceLoader extends jsdom.ResourceLoader {
+            fetch(url, options) {
+              console.log(options, url);
+            }
+          }
+          
+          const resources = await new jsdom.ResourceLoader( await this.getJsDomConfig(this.settings.puppeteer));
+          
+          const options = {
+            resources: 'usable',
+            runScripts: 'dangerously',
+            pretendToBeVisual: true,
+            virtualConsole: new jsdom.VirtualConsole(),
+            beforeParse: this.jsdomBeforeParse,
+          }
+          
+          const dom = await jsdom.JSDOM.fromURL(url, options).then( dom => this.jsdomWaitForXhr(dom, 1500));
+          // console.log(dom);
+          const evaluate = function(fn, args){ return fn(dom, args) }
+          result = func ? await func({ page: { dom, evaluate: evaluate.bind(dom) }, request }) : dom;
+          this.debug && console.timeEnd(`[MATCHER] Opened ${this.utils.trunc(url, this.urlDisplayLength, true)} in`);
+          return;
+        break;
+        
         // Use Fetcher for quick data
         case 'json':
         case 'text':
         case true:
-          const json = await fetch(url).then(res => res[typeof useFetch === 'string' ? useFetch : 'json']());
+          const json = await fetch(url).then(res => res[useFetch === 'json' ? 'json' : 'text']());
           result = func ? await func({ page: { json }, request }) : json;
           
           this.requestAmount--;
@@ -518,7 +551,7 @@ class Matcher{
   }
   
   async getPuppetterConfig({ useChrome, useApifyProxy, args }){
-    args = args || ['--no-sandbox', '--deterministic-fetch', '--unlimited-storage', '--full-memory-crash-report', '--disable-dev-shm-usage', '--disable-setuid-sandbox'];
+    args = args || ['--no-sandbox', '--deterministic-fetch', '--unlimited-storage', '--disable-dev-shm-usage', '--disable-setuid-sandbox'];
     useApifyProxy && args.push(`--proxy-server=${await this.getProxyUrl()}`);
     
     return {
@@ -531,12 +564,53 @@ class Matcher{
     }
   }
   
+  async getJsDomConfig({ useApifyProxy }){
+    return {
+      proxy: useApifyProxy ? await this.getProxyUrl() : false,
+      userAgent: this.Apify.utils.getRandomUserAgent(),
+      strictSSL: false,
+    }
+  }
+  
   cleanExit(cb){
     cb = cb || (() => {});
     process.on('cleanup', cb);
     process.on('exit', () => process.emit('cleanup') );
     process.on('SIGINT', () => { process.emit('cleanup') } );
     process.on('uncaughtException', (e) => { process.emit('cleanup') });
+  }
+  
+  jsdomBeforeParse(window){
+    window.xhr = [];
+    window.xhrLast = new Date().getTime() + 2000;
+    (function(open) {
+      window.XMLHttpRequest.prototype.open = function(method, url, async, user, pass){
+          this.addEventListener('readystatechange', () => {
+            window.xhrLast = new Date().getTime();
+            if(this.readyState === 4)
+              window.xhr.push({
+                state: this.readyState, 
+                status: this.status, 
+                text: this.responseText, 
+                type: this.getResponseHeader('content-type'),
+                url:  this.responseURL,
+              });
+          }, false);
+          open.call(this, method, url, async, user, pass);
+      };
+    })(window.XMLHttpRequest.prototype.open);
+  }
+  
+  jsdomWaitForXhr(dom, delay = 1000){
+    return new Promise( resolve => {
+      const interval = setInterval(() => {
+        if(new Date().getTime() - dom.window.xhrLast < delay) return;
+        
+        clearInterval(interval);
+        return resolve(dom);
+        
+      }, delay / 4);
+    })
   }
 }
 

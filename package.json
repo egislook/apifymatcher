@@ -14,6 +14,7 @@
   "author": "egislook",
   "license": "ISC",
   "dependencies": {
+    "jsdom": "^12.0.0",
     "node-fetch": "^2.2.0",
     "proxy-chain": "^0.2.4",
     "puppeteer": "^1.7.0"
