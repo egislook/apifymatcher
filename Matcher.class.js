@@ -102,9 +102,9 @@ class Matcher{
       
       console.log(`
       Tabs ${pages.length} - ${pageList.length} - ${maxTabs}
-      Requests ${this.initialRequestsAmount} ~ ${this.requestPendingCount()}
-      ErroredRequests ${erroredRequestsLength}
-      BlockedPolling ${blockPulling} ${browser.closingTimeAt - new Date().getTime()} ms
+      Initial ${this.initialRequestsAmount} Pending ${this.requestPendingCount()}
+      Errored ${erroredRequestsLength} Delay ${this.requestWeight * this.delayPage}
+      BlockedPolling(${blockPulling}) in ${browser.closingTimeAt - new Date().getTime()}ms
       `);
       
     }
@@ -161,6 +161,7 @@ class Matcher{
     async function add(timeless){
       const page = await browser.newPage();
       await page.setUserAgent(randomUA());
+      // page.on('console', (log) => console[log._type](log._text));
       page.closingTimeAt = new Date().getTime() + delayTabClose + randomNum(delayTabClose);
       page.browserClosingTimeAt = browser.closingTimeAt;
       const pageList = await browser.pages();
@@ -182,9 +183,6 @@ class Matcher{
     this.requestAmount++;
     this.requestWeight++;
     
-    // console.log(`[MATCHER] Request ${this.requestWeight} Delay ${delayRequest} ms`)
-    // await new Promise(r => setTimeout(r, delayRequest ));
-    
     try{
       this.debug && console.time(`[MATCHER] Opened ${this.utils.trunc(url, this.urlDisplayLength, true)} in`);
     
@@ -195,6 +193,8 @@ class Matcher{
       const noRedirects     = userData.noRedirects !== undefined    ? userData.noRedirects    : pageMatchSettings.noRedirects;
       const useFetch        = userData.useFetch !== undefined       ? userData.useFetch       : pageMatchSettings.useFetch;
       const clearCookies    = userData.clearCookies !== undefined   ? userData.clearCookies   : pageMatchSettings.clearCookies;
+      const disableJs       = userData.disableJs !== undefined      ? userData.disableJs      : pageMatchSettings.disableJs;
+      const disableCache    = userData.disableCache !== undefined   ? userData.disableCache   : pageMatchSettings.disableCache;
       
       if(err)
         return await this.handleFailedRequest({ request }, err, msg);
@@ -232,10 +232,14 @@ class Matcher{
             await page.deleteCookie(...cookies);
           }
           
+          await page.setJavaScriptEnabled(!disableJs);
+          await page.setCacheEnabled(!disableCache);
+          
           // Go to page
           this.debug && console.log(`[MATCHER] Opening ${this.utils.trunc(url, this.urlDisplayLength, true)}`);
+          
           await page.goto(url, { 
-            waitUntil: 'networkidle2',
+            waitUntil: 'networkidle0',
             timeout: this.settings.crawler.timout || 30000
           });
           
@@ -268,7 +272,7 @@ class Matcher{
       const delayRequest = this.delayPage * this.requestWeight;
       // Clomplete the request
       await this.pageMatcherResult(result, pageMatchSettings);
-      console.log('[MATCHER] Request Next in', delayRequest, 'ms', this.requestWeight);
+      // console.log('[MATCHER] Request Next in', delayRequest, 'ms', this.requestWeight);
       await this.Apify.utils.sleep(delayRequest);
       return;
       
@@ -312,6 +316,7 @@ class Matcher{
   
   // Default Matchers isFinishedFunction for apify basic crawler
   async isFinished(){
+    
     if(!this.delayExit){
       // await this.Pool.close();
       return true;
@@ -411,6 +416,10 @@ class Matcher{
         types = scriptTypes;
         exts  = scriptExts;
       break;
+      case 'image':
+        types = styleTypes.slice(0, 8);
+        exts  = styleExts.slice(0, 4);
+      break;
       default:
         types = [ ...styleTypes, ...scriptTypes ];
         exts  = [ ...styleExts, ...scriptExts ];
@@ -431,9 +440,11 @@ class Matcher{
   
   // Adds urls to requestQueue
   async queueUrls(urls, reqQueue, limit, initial){
+    this.delayExit = 10000;
     if(typeof urls === 'function')
       urls = await urls();
-    if(!urls || !urls.length) return this.debug && console.log(`[MATCHER] Queueing empty URLS`);
+    if(!urls || !urls.length) 
+      return this.debug && console.log(`[MATCHER] Queueing empty URLS`);
     
     if(limit)
       urls = urls.slice(0, limit);
@@ -507,7 +518,7 @@ class Matcher{
   }
   
   async getPuppetterConfig({ useChrome, useApifyProxy, args }){
-    args = args || ['--no-sandbox', '--deterministic-fetch', '--unlimited-storage', '--full-memory-crash-report', '--disable-dev-shm-usage'];
+    args = args || ['--no-sandbox', '--deterministic-fetch', '--unlimited-storage', '--full-memory-crash-report', '--disable-dev-shm-usage', '--disable-setuid-sandbox'];
     useApifyProxy && args.push(`--proxy-server=${await this.getProxyUrl()}`);
     
     return {
