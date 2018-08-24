@@ -184,6 +184,10 @@ class Matcher{
     return browser;
   }
   
+  async errorThrower(error){
+    throw(error);
+  }
+  
   // Default Matchers handleRequestFunction for apify basic crawler
   async handleRequest({ request }){
     const { url, userData, retryCount } = request;
@@ -219,6 +223,8 @@ class Matcher{
         
         // Use JsDom for quick dom evaluation
         case 'dom':
+          let dom;
+          const JSDOM = jsdom.JSDOM;
           
           const virtualConsole = new jsdom.VirtualConsole();
           virtualConsole.sendTo(console, { omitJSDOMErrors: true });
@@ -231,12 +237,14 @@ class Matcher{
             virtualConsole,
           }
           
-          const dom = await jsdom.JSDOM.fromURL(url, options).then( dom => this.jsdomWaitForXhr(dom, wait));
+          dom = await JSDOM.fromURL(url, options).then( dom => this.jsdomWaitForXhr(dom, wait));
+          this.debug && console.timeEnd(`[MATCHER] Opened ${this.utils.trunc(url, this.urlDisplayLength, true)} in`);
+          
           // console.log(dom);
           const evaluate = function(fn, args){ return fn(dom, args) }
           result = func ? await func({ page: { dom, evaluate: evaluate.bind(dom) }, request }) : dom;
-          this.debug && console.timeEnd(`[MATCHER] Opened ${this.utils.trunc(url, this.urlDisplayLength, true)} in`);
-          // console.log(result);
+          this.requestAmount--;
+          this.requestWeight = this.requestWeight - 2 > 0 && this.requestWeight - 2 || 0;
         break;
         
         // Use Fetcher for quick data
