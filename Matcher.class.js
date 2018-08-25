@@ -71,7 +71,7 @@ class Matcher{
     child = fork(`${__dirname}/jsdom-evaluator.js`, [], { silent: !this.debug });
     child.on('message', ({ error, url, result }) => {
       if(error) 
-        return this.debug && console.log(`[MATCHER] JSDOM error ${error}`);
+        return this.debug && console.log(`[MATCHER] JSDOM error ${error && error.toString && error.toString() || error}`);
       this.JSDOMResults[url] = result;
     });
     child.on('disconnect', () => {

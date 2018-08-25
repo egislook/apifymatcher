@@ -1,15 +1,19 @@
 const jsdom       = require('jsdom');
 
+//const requests    = {};
+
 process.on('uncaughtException', error => {
   process.send({ error });
 });
 process.on('disconnect', process.exit);
 
 process.on('message', message => {
+  //requests[message.url] = message;
+  
   getDom(message).then(({ url, result }) => {
-    console.log('DONE', url);
     process.send({ url, result });
   });
+  return;
 });
 
 const JSDOM           = jsdom.JSDOM;
