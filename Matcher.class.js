@@ -67,7 +67,7 @@ class Matcher{
   /** Main methods
    */
   startJSDOM(){
-    if(child) child.kill('SIGKILL');
+    if(child && child.kill) child.kill('SIGKILL');
     child = fork(`${__dirname}/jsdom-evaluator.js`, [], { silent: !this.debug });
     child.on('message', ({ error, url, result }) => {
       if(error) 

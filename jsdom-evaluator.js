@@ -121,7 +121,10 @@ function jsdomWaitForXhr(dom, wait = 0){
     function done(){
       clearInterval(interval);
       dom.window.done = true;
-      try{ dom.window.stop() } catch(err){}
+      try{ 
+        dom.window.stop();
+        if (global.gc) global.gc();
+      } catch(err){}
       return resolve(dom);
     }
   })
