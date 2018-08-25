@@ -360,10 +360,10 @@ class Matcher{
       if(err === 'CaptchaError')
         throw('TimeoutError');
         
-      // if(this.settings.matcher.delayError){
-      //   console.log(`[MATCHER] after Error Delay ${this.settings.matcher.delayError} ms`);
-      //   await this.Apify.utils.sleep(this.settings.matcher.delayError);
-      // }
+      if(this.settings.matcher.delayError){
+        console.log(`[MATCHER] after Error Delay ${this.settings.matcher.delayError} ms`);
+        await this.Apify.utils.sleep(this.settings.matcher.delayError);
+      }
       
       if(!err.skipRetries){
         const retriesLeft = this.settings.crawler.maxRequestRetries - this.addErroredRequest(request, err);
