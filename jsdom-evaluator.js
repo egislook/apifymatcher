@@ -5,10 +5,11 @@ process.on('uncaughtException', error => {
 });
 process.on('disconnect', process.exit);
 
-process.on('message', async m => {
-  const { url, result } = await getDom(m);
-  process.send({ url, result });
-  
+process.on('message', message => {
+  getDom(message).then(({ url, result }) => {
+    console.log('DONE', url);
+    process.send({ url, result });
+  });
 });
 
 const JSDOM           = jsdom.JSDOM;
@@ -16,10 +17,6 @@ const virtualConsole  = new jsdom.VirtualConsole();
 const cookieJar       = new jsdom.CookieJar();
 
 process.setMaxListeners(Infinity);
-
-// setTimeout(function() {
-//   throw ('wtf');
-// }, 5000);
 
 
 async function getDom({ disableJs, blockResources, url, wait, proxy, userAgent, func, userData, custom }){

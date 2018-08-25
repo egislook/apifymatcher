@@ -60,6 +60,7 @@ class Matcher{
     this.requestAmount  = 0;
     this.requestWeight  = 0;
     this.JSDOMRequests  = 0;
+    this.JSDOMResults   = {};
   }
   
   
@@ -68,8 +69,10 @@ class Matcher{
   startJSDOM(){
     if(child) child.kill('SIGKILL');
     child = fork(`${__dirname}/jsdom-evaluator.js`, [], { silent: !this.debug });
-    child.on('message', ({ error }) => {
-      error && this.debug && console.log(`[MATCHER] JSDOM error ${error}`);
+    child.on('message', ({ error, url, result }) => {
+      if(error) 
+        return this.debug && console.log(`[MATCHER] JSDOM error ${error}`);
+      this.JSDOMResults[url] = result;
     });
     child.on('disconnect', () => {
       console.log('[MATCHER] JSDOM process disconnected');
@@ -257,19 +260,18 @@ class Matcher{
             custom: this.settings.custom
           });
           
-          child.on('message', data => { 
-            if(data.url === url) 
-              result = data.result;
-          });
-          
-          while(!result && !timeout){
+          while(!this.JSDOMResults[url] && !timeout){
             await this.Apify.utils.sleep(500);
           }
           
+          // child.send({ url, stop: true });
+          
+          result = this.JSDOMResults[url];
+          delete this.JSDOMResults[url];
           this.JSDOMRequests--;
           
           if(timeout)
-            throw('TimeoutError');
+            throw('ReclaimError');
           
           this.debug && console.timeEnd(`[MATCHER] Opened ${this.utils.trunc(url, this.urlDisplayLength, true)} in`);
           
@@ -358,10 +360,10 @@ class Matcher{
       if(err === 'CaptchaError')
         throw('TimeoutError');
         
-      if(this.settings.matcher.delayError){
-        console.log(`[MATCHER] after Error Delay ${this.settings.matcher.delayError} ms`);
-        await this.Apify.utils.sleep(this.settings.matcher.delayError);
-      }
+      // if(this.settings.matcher.delayError){
+      //   console.log(`[MATCHER] after Error Delay ${this.settings.matcher.delayError} ms`);
+      //   await this.Apify.utils.sleep(this.settings.matcher.delayError);
+      // }
       
       if(!err.skipRetries){
         const retriesLeft = this.settings.crawler.maxRequestRetries - this.addErroredRequest(request, err);
@@ -372,17 +374,13 @@ class Matcher{
         initial && this.initialRequestsAmount++;
       }
       
-      switch(err.name){
-        case 'ApifyError':
-        case 'TimeoutError':
-          throw(err);
-        case 'ReclaimError':
-          throw('TimeoutError');
-        default:
-          return await this.handleFailedRequest({ request }, err.name ? err.name : 'error_cought', err);
-      }
-        
+      if('ReclaimError' === err.name || err === 'ReclaimError')
+        throw('TimeoutError');
       
+      if(~['ApifyError', 'TimeoutError'].indexOf(err.name))
+        throw(err);
+      
+      return await this.handleFailedRequest({ request }, err.name ? err.name : 'error_cought', err);
     }
   }
   
