@@ -76,7 +76,7 @@ class Matcher{
     });
     child.on('disconnect', () => {
       console.log('[MATCHER] JSDOM process disconnected');
-      child.removeAllListeners('message');
+      child.removeAllListeners();
       this.startJSDOM();
     });
   }
