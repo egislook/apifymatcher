@@ -4,6 +4,10 @@ const fetch       = require('node-fetch');
 const jsdom       = require('jsdom');
 const utils       = require('./utils.js');
 const randomUA    = require('random-fake-useragent').getRandom;
+const fork        = require('child_process').fork;
+
+let child;
+
 
 /** TODO
  * 
@@ -55,19 +59,36 @@ class Matcher{
     this.urlDisplayLength = 100;
     this.requestAmount  = 0;
     this.requestWeight  = 0;
+    this.JSDOMRequests  = 0;
   }
   
   
   /** Main methods
    */
+  startJSDOM(){
+    if(child) child.kill('SIGKILL');
+    child = fork(`${__dirname}/jsdom-evaluator.js`, [], { silent: !this.debug });
+    child.on('message', ({ error }) => {
+      error && this.debug && console.log(`[MATCHER] JSDOM error ${error}`);
+    });
+    child.on('disconnect', () => {
+      console.log('[MATCHER] JSDOM process disconnected');
+      child.removeAllListeners('message');
+      this.startJSDOM();
+    });
+  }
+  
+  closeJSDOM(){
+    child.kill('SIGKILL');
+  }
   // Initiates puppeteer and creates pool of pages
   async pagePool(puppeteerConfig){
     
-    // JSDOM stuff
-    this.cookieJar  = new jsdom.CookieJar();
     this.proxy      = await this.getProxyUrl({ session: this.settings.puppeteer.session });
     
     puppeteerConfig = puppeteerConfig || this.settings.puppeteer;
+    
+    this.startJSDOM();
     
     const delayTabClose = this.settings.matcher.delayTabClose || 120000;
     const maxTabs       = this.settings.crawler.maxConcurrency; 
@@ -98,6 +119,7 @@ class Matcher{
       if((pageList.length === pages.length || timeoutForBrowserClose) && blockPulling){
         console.log('[MATCHER] Closing Browser | ' + maxTabs, { forced: timeoutForBrowserClose });
         this.proxy      = await this.getProxyUrl({ session: this.settings.puppeteer.session });
+        this.startJSDOM();
         // Puppeteer stuff
         pageList.forEach( remove );
         await new Promise(r => setTimeout(r, 2000));
@@ -111,7 +133,7 @@ class Matcher{
       }
       
       console.log(`
-      Tabs ${pages.length} - ${pageList.length} - ${maxTabs}
+      Tabs ${pages.length} - ${pageList.length} - ${maxTabs} - JSDOM ${this.JSDOMRequests}
       Initial ${this.initialRequestsAmount} Pending ${this.requestPendingCount()}
       Errored ${erroredRequestsLength} Delay ${this.requestWeight * this.delayPage}
       BlockedPolling(${blockPulling}) in ${browser.closingTimeAt - new Date().getTime()}ms
@@ -184,10 +206,6 @@ class Matcher{
     return browser;
   }
   
-  async errorThrower(error){
-    throw(error);
-  }
-  
   // Default Matchers handleRequestFunction for apify basic crawler
   async handleRequest({ request }){
     const { url, userData, retryCount } = request;
@@ -219,30 +237,42 @@ class Matcher{
         return console.log(`[MATCHER] ${status} ${msg} ${this.utils.trunc(url, this.urlDisplayLength, true)}`);
       
       let result;
+      let timeout;
       switch(useFetch){
         
         // Use JsDom for quick dom evaluation
         case 'dom':
-          let dom;
-          const JSDOM = jsdom.JSDOM;
+          this.JSDOMRequests++;
           
-          const virtualConsole = new jsdom.VirtualConsole();
-          virtualConsole.sendTo(console, { omitJSDOMErrors: true });
-          const options = {
-            resources: blockResources !== true && this.jsdomResources({ disableJs, blockResources, url }), //|| 'usable',
-            runScripts: wait && 'dangerously' || undefined,
-            pretendToBeVisual: true,
-            beforeParse:  this.jsdomBeforeParse || (() => {}),
-            cookieJar:    this.cookieJar,
-            virtualConsole,
+          setTimeout(() => { timeout = true }, this.settings.puppeteer.timeout);
+          
+          child.send({ 
+            disableJs, 
+            blockResources, 
+            url, 
+            wait, 
+            proxy: this.proxy, 
+            func: func && func.toString(),
+            userData,
+            custom: this.settings.custom
+          });
+          
+          child.on('message', data => { 
+            if(data.url === url) 
+              result = data.result;
+          });
+          
+          while(!result && !timeout){
+            await this.Apify.utils.sleep(500);
           }
           
-          dom = await JSDOM.fromURL(url, options).then( dom => this.jsdomWaitForXhr(dom, wait));
+          this.JSDOMRequests--;
+          
+          if(timeout)
+            throw('TimeoutError');
+          
           this.debug && console.timeEnd(`[MATCHER] Opened ${this.utils.trunc(url, this.urlDisplayLength, true)} in`);
           
-          // console.log(dom);
-          const evaluate = function(fn, args){ return fn(dom, args) }
-          result = func ? await func({ page: { dom, evaluate: evaluate.bind(dom) }, request }) : dom;
           this.requestAmount--;
           this.requestWeight = this.requestWeight - 2 > 0 && this.requestWeight - 2 || 0;
         break;
@@ -361,6 +391,7 @@ class Matcher{
     
     if(!this.delayExit){
       // await this.Pool.close();
+      await this.closeJSDOM();
       return true;
     }
     
@@ -509,14 +540,18 @@ class Matcher{
         delete userData.urls;
       }
       
-      await reqQueue.addRequest(new this.Apify.Request({ url, userData }));
-      this.debug && console.log(`[MATCHER] Queued ${this.requestPendingCount()}`, this.utils.trunc(url, this.urlDisplayLength, true), { userDataSize: Object.keys(userData).length });
-      userData.initial && this.initialRequestsAmount++;
-      
-      if( (perBatch * batch) < i ){
-        console.log(`[MATCHER] Queued ${perBatch * batch} / ${urls.length}`);
-        await this.Apify.utils.sleep(delayAfterBatch);
-        batch++;
+      if(url && url.length){
+        await reqQueue.addRequest(new this.Apify.Request({ url, userData }));
+        this.debug && console.log(`[MATCHER] Queued ${this.requestPendingCount()}`, this.utils.trunc(url, this.urlDisplayLength, true), { userDataSize: Object.keys(userData).length });
+        userData.initial && this.initialRequestsAmount++;
+        
+        if( (perBatch * batch) < i ){
+          console.log(`[MATCHER] Queued ${perBatch * batch} / ${urls.length}`);
+          await this.Apify.utils.sleep(delayAfterBatch);
+          batch++;
+        }
+      } else {
+        this.debug && console.log(`[MATCHER] Queuing empty url ${url}`);
       }
     }
   }
@@ -561,7 +596,7 @@ class Matcher{
   }
   
   async getPuppetterConfig({ useChrome, useApifyProxy, args }){
-    args = args || ['--no-sandbox', '--deterministic-fetch', '--unlimited-storage', '--disable-dev-shm-usage', '--disable-setuid-sandbox'];
+    args = args || ['--no-sandbox', '--deterministic-fetch', '--unlimited-storage', '--disable-dev-shm-usage', '--disable-setuid-sandbox', '--disable-gpu'];
     useApifyProxy && args.push(`--proxy-server=${this.proxy}`);
     
     return {
@@ -580,119 +615,6 @@ class Matcher{
     process.on('exit', () => process.emit('cleanup') );
     process.on('SIGINT', () => { process.emit('cleanup') } );
     process.on('uncaughtException', (e) => { process.emit('cleanup') });
-  }
-  
-  getJsDomConfig({ useApifyProxy }){
-    return {
-      proxy: useApifyProxy ? this.proxy : false,
-      userAgent: randomUA(),
-      strictSSL: false,
-    }
-  }
-  
-  jsdomBeforeParse(window){
-    window.xhr      = [];
-    window.xhrLast  = new Date().getTime() + 2000;
-    window.done     = false;
-    (function(open) {
-      window.XMLHttpRequest.prototype.open = function(method, url, async, user, pass){
-          this.addEventListener('readystatechange', () => {
-            if(window.done) return this.abort();
-            window.xhrLast = new Date().getTime();
-            if(this.readyState === 4)
-              window.xhr.push({
-                state: this.readyState, 
-                status: this.status, 
-                text: this.responseText, 
-                type: this.getResponseHeader('content-type'),
-                url:  this.responseURL,
-              });
-          }, false);
-          open.call(this, method, url, async, user, pass);
-      };
-    })(window.XMLHttpRequest.prototype.open);
-  }
-  
-  jsdomWaitForXhr(dom, wait = 0){
-    let type, tick = 30, times, start;
-    if(typeof wait === 'number'){
-      start = new Date().getTime();
-    } else if(~wait.indexOf('domchanged')){
-      type = 'domchanged';
-      times = parseInt(wait.replace('domchanged', '')) || 1;
-      wait = 2000;
-    } else if(~wait.indexOf('networkidle')){
-      type = 'networkidle';
-      times = parseInt(wait.replace('networkidle', '')) || 0;
-      wait = 1000;
-    }
-      
-    return new Promise( resolve => {
-      // console.log(dom.window.document.body.textContent.trim().substring(0, 200));
-      if(!wait) return resolve(dom);
-      
-      dom.window.domLength = dom.window.document.body.textContent.trim().length;
-      
-      const interval = setInterval(() => {
-        tick--; if(tick < 1) return done();
-        
-        switch(type){
-          
-          case 'domchanged':
-            const length = dom.window.document.body.textContent.trim();
-            if(dom.window.domLength === length ) return;
-            dom.window.domLength = length;
-            if(times > 1){ times--; return; }
-          break;
-          
-          case 'networkidle':
-            if(new Date().getTime() - dom.window.xhrLast < wait) return;
-            if(times > 1){ times--; return; }
-          break;
-          
-          default:
-            if(new Date().getTime() < (start + wait)) return;
-        }
-          
-        return done();
-      }, wait / 4);
-      
-      function done(){
-        clearInterval(interval);
-        dom.window.done = true;
-        try{ dom.window.stop() } catch(err){}
-        return resolve(dom);
-      }
-    })
-  }
-  
-  jsdomResources({ url, blockResources, disableJs }){
-    
-    class CustomResourceLoader extends jsdom.ResourceLoader {
-      fetch(url, options){
-        const { disableJs, blockResources, hostname } = this.fetchConfig;
-        
-        if((blockResources === 'style') && ~url.indexOf('.css'))
-          return Promise.resolve(null);
-        
-        if((blockResources === 'script' || disableJs) && ~url.indexOf('.js'))
-          return Promise.resolve(null);
-          
-        if((blockResources === 'external') && !~url.indexOf(hostname))
-          return Promise.resolve(null);
-        // console.log(url);
-        // Override the contents of this script to do something unusual.
-        // if (url === "https://example.com/some-specific-script.js") {
-        //   return Buffer.from("window.someGlobal = 5;");
-        // }
-    
-        return super.fetch(url, options);
-      }
-    }
-    
-    const resources = new CustomResourceLoader( { ...this.getJsDomConfig({ ...this.settings.puppeteer }) });
-    resources.fetchConfig = { blockResources, disableJs, hostname: url.split('/')[2] };
-    return resources;
   }
 }
 
