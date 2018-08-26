@@ -96,7 +96,6 @@ class Matcher{
     const delayTabClose = this.settings.matcher.delayTabClose || 120000;
     const maxTabs       = this.settings.crawler.maxConcurrency; 
     const randomNum     = this.utils.randomNum;
-    this.requestWeight  = this.requestWeight > 50 ? 50  : this.requestWeight;
     
     let blockPulling = false;
     
@@ -121,6 +120,7 @@ class Matcher{
         
       if((pageList.length === pages.length || timeoutForBrowserClose) && blockPulling){
         console.log('[MATCHER] Closing Browser | ' + maxTabs, { forced: timeoutForBrowserClose });
+        this.requestWeight  = this.requestWeight > 50 ? 50  : this.requestWeight;
         this.proxy      = await this.getProxyUrl({ session: this.settings.puppeteer.session });
         this.startJSDOM();
         // Puppeteer stuff
@@ -355,7 +355,7 @@ class Matcher{
       this.requestWeight++;
       
       await this.Pool.remove(page);
-      console.log(`[MATCHER]`, err, this.utils.trunc(url, this.urlDisplayLength, true));
+      this.debug && console.log(`[MATCHER]`, err, this.utils.trunc(url, this.urlDisplayLength, true));
       
       if(err === 'CaptchaError')
         throw('TimeoutError');
