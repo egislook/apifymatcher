@@ -1,10 +1,12 @@
-const fetch       = require('node-fetch');
+const fetch = require('node-fetch');
 
 
-function utils(Apify){
+function utils(Apify, requestQueue){
   Apify = Apify || global.Apify;
+  requestQueue = requestQueue || global.requestQueue;
   
   return {
+    wait,
     shot,
     error,
     clearText,
@@ -14,6 +16,14 @@ function utils(Apify){
     getSpreadsheet,
     getExchangeRate,
     queueUrls,
+    
+    getPageMatchSettings,
+    filterRequests,
+    pageMatcherResult,
+  }
+  
+  async function wait(delay){
+    return await new Promise(resolve => setTimeout(resolve, delay))
   }
   
   async function shot(p, h){
@@ -32,21 +42,55 @@ function utils(Apify){
     return;
   }
   
-  async function queueUrls(urls, reqQueue, limit){
-  
+  async function queueUrls(urls, reqQueue, limit, initial){
+    global.allowTurnOff = false;
+    if(typeof urls === 'function')
+      urls = await urls();
+    if(!urls || !urls.length) 
+      return this.debug && console.log(`[MATCHER] Queueing empty URLS`);
+    
     if(limit)
       urls = urls.slice(0, limit);
       
-    reqQueue = reqQueue || global.requestQueue;
+    reqQueue = reqQueue || this.requestQueue || global.requestQueue;
     let i, urlObj, url, userData;
+    let batch = 1, perBatch = 100, delayAfterBatch = 5000;
     
+    console.log(`[MATCHER] Queuing ${urls.length} + ${requestPendingCount(reqQueue)}`);
     for(i in urls){
+      
       urlObj    = typeof urls[i] === 'string' ? { url: urls[i] } : urls[i];
       url       = urlObj.url;
-      userData  = urlObj.userData || { ...urlObj };
-      await reqQueue.addRequest(new Apify.Request({ url, userData }));
-      console.log(`[MATCHER] ${urls.length - i} Left. Add to Queue`, url, { userDataSize: Object.keys(userData).length });
+      userData  = urlObj.userData ? { ...urlObj.userData, initial } : { ...urlObj, initial };
+      
+      delete userData.reclaim;
+      
+      if(initial){
+        delete userData.url;
+        delete userData.urls;
+      }
+      
+      if(url && url.length){
+        await reqQueue.addRequest(new Apify.Request({ url, userData }));
+        this.debug && console.log(`[MATCHER] Queued ${requestPendingCount(reqQueue)}`, trunc(url, 150, true), { userDataSize: Object.keys(userData).length });
+        userData.initial && this.initialRequestsAmount++;
+        
+        if( (perBatch * batch) < i ){
+          console.log(`[MATCHER] Queued ${perBatch * batch} / ${urls.length}`);
+          await Apify.utils.sleep(delayAfterBatch);
+          batch++;
+        }
+      } else {
+        this.debug && console.log(`[MATCHER] Queuing empty url ${url}`);
+      }
     }
+  }
+  
+  function requestPendingCount(rq, cr){
+    if(rq.pendingCount) return rq.pendingCount;
+    const count = rq.requestsCache && rq.requestsCache.listDictionary.linkedList.length || 0;
+    if(!cr) return count;
+    return count - cr.handledRequestsCount;
   }
   
   function clearText(text){
@@ -111,6 +155,200 @@ function utils(Apify){
         return { USD: exchangeRates[currency] }
       });
   }
+  
+  // Collects Matcher settings for matching (url or matcherLabel) page
+  async function getPageMatchSettings(pageMatcherData, { userData, url }){
+    const { matcherLabel } = userData;
+    
+    let pageMatch = pageMatcherData.find(
+      matcher => matcherLabel 
+        ? matcher.label === matcherLabel 
+        : matcher.url === url || matcher.match instanceof Array ? matcher.match.filter( m => url.includes(m) ).length : url.includes(matcher.match)
+    );
+    
+    if(!pageMatch){
+      pageMatch = pageMatcherData.find( matcher => 
+        matcher.ignoreMatch === url || 
+        matcher.ignoreMatch instanceof Array ? matcher.ignoreMatch.filter( m => url.includes(m) ).length : url.includes(matcher.ignoreMatch)
+      )
+      if(pageMatch)
+        return { status: 'ignore_match', msg: 'ignoreMatch is matching the url' }
+    }
+    
+    if(!pageMatch || !pageMatch.func)
+      return { err: 'missing_page_setting', msg: 'Missing PageMatcher setting for this page' };
+      
+    const blockResources  = userData.blockResources !== undefined ? userData.blockResources : pageMatch.blockResources;
+    const noRedirects     = userData.noRedirects !== undefined    ? userData.noRedirects    : pageMatch.noRedirects;
+    const clearCookies    = userData.clearCookies !== undefined   ? userData.clearCookies   : pageMatch.clearCookies;
+    const disableJs       = userData.disableJs !== undefined      ? userData.disableJs      : pageMatch.disableJs;
+    const disableCache    = userData.disableCache !== undefined   ? userData.disableCache   : pageMatch.disableCache;
+    const wait            = userData.wait !== undefined           ? userData.wait           : pageMatch.wait;
+    const timeout         = userData.timeout !== undefined        ? userData.timeout        : pageMatch.timeout;
+    const type            = userData.type !== undefined           ? userData.type           : pageMatch.type;
+    const conTimeout      = userData.conTimeout !== undefined     ? userData.conTimeout     : pageMatch.conTimeout;
+    
+    return { ...pageMatch, blockResources, noRedirects, clearCookies, disableJs, disableCache, wait, timeout, type, conTimeout };
+  }
+  
+  async function pageMatcherResult(data, requestQueue){
+    requestQueue = requestQueue || global.requestQueue;
+      
+    const { request, page, response, puppeteerPool, match } = data;
+    const { template, func } = match;
+    
+    let result;
+    
+    if(data.result)
+      result = data.result;
+    else if(func)
+      result = await func(data);
+    
+    const { skipUrls, limit, showSkip, urls, status, skip } = result || {};
+    
+    if(!result)
+      return console.log('[MATCHER] Empty Result', result);
+    
+    // Add urls to queue
+    if(!skipUrls && urls)
+      await queueUrls(result.urls, requestQueue, limit);
+    
+    // Skip result
+    if(skip || status === 'done')
+      return showSkip && console.log('[MATCHER] Skipping Result', result);
+    
+    if(status)
+      console.log('[MATCHER] Result', status);
+    
+    // Generate template
+    if(template)
+      result = result instanceof Array ? result.map(template) : template(result);
+    
+    // Adds result to Apify Store
+    await Apify.pushData(result);
+    return result;
+  }
+  
+  async function filterRequests(page, filters){
+    const { noRedirects, blockResources, timeout, wait, conTimeout, url } = filters;
+    
+    await page.setRequestInterception(noRedirects || !!blockResources);
+    if(!blockResources) return;
+    
+    const scriptTypes = [ 'script', 'other' ];
+    const styleTypes  = [ 'image', 'media', 'font', 'texttrack', 'beacon', 'imageset', 'object', 'csp_report', 'stylesheet' ];
+    const styleExts   = [ '.jpg', 'jpeg', '.png', '.gif', '.css'];
+    const scriptExts  = [ '.js' ];
+    const dataTypes   = [ 'xhr' ];
+    const dataExts    = [ '.json' ];
+    
+    let types, exts;
+    
+    switch(blockResources){
+      case 'style':
+      case 'styles':
+      case 'css':
+        types = styleTypes;
+        exts  = styleExts;
+      break;
+      case 'script':
+      case 'scripts':
+        types = scriptTypes;
+        exts  = scriptExts;
+      break;
+      case 'image':
+      case 'images':
+      case 'img':
+        types = styleTypes.slice(0, 8);
+        exts  = styleExts.slice(0, 4);
+      break;
+      case 'data':
+        types = dataTypes;
+        exts  = dataExts;
+      default:
+        types = [ ...styleTypes, ...scriptTypes, ...dataTypes ];
+        exts  = [ ...styleExts, ...scriptExts, ...dataExts ];
+      break;
+    }
+    
+    const blacklist = [
+      'https://www.googleadservices.com/pagead/conversion.js',
+      'https://www.google-analytics.com/analytics.js',
+      'https://de.farnell.com/dynaTraceMonitor',
+    ]
+    
+    // Resource Connection checker
+    // let interval;
+    // let connected = false;
+    
+    // setTimeout(function(){ clearInterval(interval) }, timeout);
+    
+    // if(conTimeout && !connected && !page.noReconnects){
+    //   interval = setTimeout(async function(){
+    //     if(connected){
+    //       await page.waitFor(1);
+    //       page.noReconnects = true;
+    //       return clearInterval(interval);
+    //     }
+          
+    //     console.log('NO CONNECTION');
+    //     //{ waitUntil: wait || 'domcontentloaded', timeout: timeout || 30000 }
+    //     // return await Promise.race[ 
+    //     //   page.goto(url, { waitUntil: wait || 'networkidle2', timeout: timeout || 30000 }),
+    //     //   new Promise( resolve => setTimeout(resolve, 4000) )
+    //     // ]
+    //   }, conTimeout || 6000);
+    // }
+    
+    page.on('request', req => allow(req, page));
+    return;
+    
+    function allow(req, page){
+      if(url !== req.url())
+        page.isConnected = true;
+      // const isRedirect = req.isNavigationRequest() && req.redirectChain().length;
+      const isResource = types.includes(req.resourceType()) || exts.includes(req.url()) || blacklist.includes(req.url());
+      
+      !isResource // (noRedirects && !isRedirect) 
+        ? req.continue() //&& console.log('[MATCHER] Alowed', req.resourceType(), req.url())
+        : req.abort() //&& console.log('[MATCHER] Blocked', req.resourceType(), req.url())
+    }
+    
+  }
 }
 
 module.exports = utils;
+
+
+
+
+/**
+ * No connection checker example
+ */
+ 
+//let response;
+// let num = 30;
+
+// let pageGoto = page.goto(url, { waitUntil: wait || 'domcontentloaded', timeout: timeout || 30000 });
+
+// let res;
+// while(!page.isConnected && num > 0){
+//   num--;
+//   console.log(num);
+//   page.removeAllListeners('request');
+//   await page.goto('about:blank');
+  
+//   await filterRequests(page, { noRedirects, blockResources, timeout, wait, conTimeout, url });
+//   res = page.goto(url, { waitUntil: wait || 'domcontentloaded', timeout: timeout || 30000 });
+//   res.catch(err => { throw(err) });
+//   await new Promise( resolve => setTimeout(resolve, 5000) );
+// }
+
+// console.log('PAGE IS CONNECTED', page.isConnected);
+// const response = await res;
+
+// console.log(response);
+
+
+
+// const response = await page.goto(url, { waitUntil: wait || 'domcontentloaded', timeout: timeout || 30000 });

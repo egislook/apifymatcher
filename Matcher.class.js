@@ -1,10 +1,8 @@
-const puppeteer   = global.puppeteer || require(require.resolve('puppeteer'));
-const proxyChain  = require('proxy-chain');
 const fetch       = require('node-fetch');
 const jsdom       = require('jsdom');
 const utils       = require('./utils.js');
-const randomUA    = require('random-fake-useragent').getRandom;
 const fork        = require('child_process').fork;
+
 
 let child;
 
@@ -85,129 +83,7 @@ class Matcher{
     child.kill('SIGKILL');
   }
   // Initiates puppeteer and creates pool of pages
-  async pagePool(puppeteerConfig){
-    
-    this.proxy      = await this.getProxyUrl({ session: this.settings.puppeteer.session });
-    
-    puppeteerConfig = puppeteerConfig || this.settings.puppeteer;
-    
-    this.startJSDOM();
-    
-    const delayTabClose = this.settings.matcher.delayTabClose || 120000;
-    const maxTabs       = this.settings.crawler.maxConcurrency; 
-    const randomNum     = this.utils.randomNum;
-    
-    let blockPulling = false;
-    
-    let browser = await launchBrowser(await this.getPuppetterConfig(puppeteerConfig), this.settings.matcher.delayBrowserClose || 240000, randomUA());
-    
-    let pages = await browser.pages();
-        pages.forEach( remove );
-        pages = [ await add() ];
-        
-    const delayRequest = () => this.delayPage * this.requestWeight;
-    
-    setInterval(reportPool.bind(this), this.settings.matcher.delayReport || 30000);
-    
-    async function reportPool(){
-      const pageList = await browser.pages();
-      const erroredRequestsLength = Object.keys(this.erroredRequests || {}).length;
-      
-      if(browser.closingTimeAt < new Date().getTime())
-        blockPulling = 1;
-      
-      const timeoutForBrowserClose = (browser.closingTimeAt + ((this.settings.crawler.timout || 30000) * 2) ) < new Date().getTime();
-        
-      if((pageList.length === pages.length || timeoutForBrowserClose) && blockPulling){
-        console.log('[MATCHER] Closing Browser | ' + maxTabs, { forced: timeoutForBrowserClose });
-        this.requestWeight  = this.requestWeight > 50 ? 50  : this.requestWeight;
-        this.proxy      = await this.getProxyUrl({ session: this.settings.puppeteer.session });
-        this.startJSDOM();
-        // Puppeteer stuff
-        pageList.forEach( remove );
-        await new Promise(r => setTimeout(r, 2000));
-        browser = await close();
-        browser = await launchBrowser(await this.getPuppetterConfig(puppeteerConfig), this.settings.matcher.delayBrowserClose || 240000, randomUA());
-        pages = await browser.pages();
-        pages.forEach( remove );
-        pages = [ await add() ];
-        blockPulling = 0;
-        this.requestAmount = 0;
-      }
-      
-      console.log(`
-      Tabs ${pages.length} - ${pageList.length} - ${maxTabs} - JSDOM ${this.JSDOMRequests}
-      Initial ${this.initialRequestsAmount} Pending ${this.requestPendingCount()}
-      Errored ${erroredRequestsLength} Delay ${this.requestWeight * this.delayPage}
-      BlockedPolling(${blockPulling}) in ${browser.closingTimeAt - new Date().getTime()}ms
-      `);
-      
-    }
-    
-    
-    async function launchBrowser(cfg, delay, userAgent){
-      console.log('[MATCHER] Launching Browser');
-      const browser = await puppeteer.launch(cfg);
-      userAgent && browser.userAgent(userAgent);
-      // const browser  = instance.createIncognitoBrowserContext ? await instance.createIncognitoBrowserContext() : instance;
-      browser.closingTimeAt = new Date().getTime() + (delay * 1.5);
-      return browser;
-    }
-    
-    async function pull(timeless){
-      while(blockPulling){
-        this.requestWeight++;
-        console.log('WAITING FOR UNBLOCKED PULLING');
-        await new Promise(r => setTimeout(r, delayRequest()));
-      }
-      
-      if(pages.length)
-        return pages.shift();
-      
-      return await add(timeless);
-    }
-    
-    async function push(page){
-      if(!page) return;
-      if(blockPulling || await browser.pages().length < maxTabs)
-        return remove(page);
-      
-      if(new Date().getTime() > page.closingTimeAt) return await remove(page);
-      
-      page.removeAllListeners('request');
-      pages.push(page);
-      this.debug && console.log(`[MATCHER] Tab Free - Now ${pages.length}`);
-      return;
-    }
-    
-    async function close(){
-      pages = []; 
-      await browser.close();
-      return;
-    }
-    
-    async function remove(page){
-      if(!page) return;
-      await page.goto('about:blank');
-      await page.close();
-      const pageList = await browser.pages();
-      console.log(`[MATCHER] Tab Close - Now ${pageList.length}`);
-    }
-    
-    async function add(timeless){
-      const page = await browser.newPage();
-      await page.setUserAgent(randomUA());
-      // page.on('console', (log) => console[log._type](log._text));
-      page.closingTimeAt = new Date().getTime() + delayTabClose + randomNum(delayTabClose);
-      page.browserClosingTimeAt = browser.closingTimeAt;
-      const pageList = await browser.pages();
-      console.log(`[MATCHER] Tab Open  - Now ${pageList.length}`);
-      return page; //pages.push(page);
-    }
-    
-    this.Pool = ({ pull, push, close, add, browser, remove });
-    return browser;
-  }
+  
   
   // Default Matchers handleRequestFunction for apify basic crawler
   async handleRequest({ request }){
@@ -583,28 +459,6 @@ class Matcher{
     const count = rq.requestsCache && rq.requestsCache.listDictionary.linkedList.length || 0;
     if(!cr) return count;
     return count - cr.handledRequestsCount;
-  }
-  
-  async getProxyUrl({ session }){
-    const sessionName = session ? `,session-${this.utils.randomNum(10, 5000)}` : '';
-    let proxyUrl = `http://${process.env.APIFY_PROXY_USERNAME || 'auto'}${sessionName}:${process.env.APIFY_PROXY_PASSWORD}@proxy.apify.com:8000`;
-    proxyUrl = await proxyChain.anonymizeProxy(proxyUrl);
-    console.log(`[MATCHER] Proxy ${proxyUrl}${sessionName}`);
-    return proxyUrl;
-  }
-  
-  async getPuppetterConfig({ useChrome, useApifyProxy, args }){
-    args = args || ['--no-sandbox', '--deterministic-fetch', '--unlimited-storage', '--disable-dev-shm-usage', '--disable-setuid-sandbox', '--disable-gpu'];
-    useApifyProxy && args.push(`--proxy-server=${this.proxy}`);
-    
-    return {
-      headless: true,
-      useChrome: useChrome !== undefined ? useChrome : true,
-      userAgent: randomUA(),
-      ignoreHTTPSErrors: true,
-      useApifyProxy: useApifyProxy,
-      args
-    }
   }
   
   cleanExit(cb){
